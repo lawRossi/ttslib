@@ -1,0 +1,46 @@
+model: "ttslib.model.LightSpeech"
+
+vocab_size: 220
+
+embed_dims: 256
+
+num_speakers: 265
+
+use_energy: false
+
+stop_gradient: false
+
+use_existing_speaker_vectors: false
+
+speaker_encoder:
+  model: "FC"
+  layers: 2
+  kernel_size: [5, 7]
+  vector_dims: 256
+  vector_file: "data/speakers.pkl"
+
+encoder:
+  model_type: "GLU"
+  kernel_sizes: [5, 5, 5, 5]
+  layers: 4
+  dropout: 0.1
+  padding_idx: 1
+
+decoder:
+  model_type: "GLU"
+  kernel_sizes: [5, 5, 5, 5]
+  layers: 4
+  output_dims: 80
+  dropout: 0.1
+
+variance_predictor:
+  kernel_size: 3
+  filter_size: 256
+  dropout: 0.5
+  min_pitch: -2.20
+  max_pitch: 11.0
+  quantization_bins: 256
+  quantization_method: "linear"
+
+vocoder:
+  model: hifigan
