@@ -6,8 +6,15 @@ class ScheduledOptimizer:
 
     def __init__(self, model, train_config):
         self.model = model
+        parameters = []
+        for name, params in self.model.named_parameters():
+            if any(name.startswith(layer) for layer in train_config["frozen_layers"]):
+                params.requires_grad = False
+            else:
+                parameters.append(params)
+        self.parameters = parameters
         self._optimizer = torch.optim.Adam(
-            model.parameters(),
+            parameters,
             betas=train_config["optimizer"]["betas"],
             eps=train_config["optimizer"]["eps"],
             weight_decay=train_config["optimizer"]["weight_decay"],
@@ -21,7 +28,7 @@ class ScheduledOptimizer:
         self.train_config = train_config
 
     def step(self):
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_thresh)
+        torch.nn.utils.clip_grad_norm_(self.parameters, self.grad_clip_thresh)
         self._update_learning_rate()
         self._optimizer.step()
 
@@ -33,7 +40,7 @@ class ScheduledOptimizer:
 
     def load_state_dict(self, path):
         self._optimizer.load_state_dict(path)
-    
+
     def get_lr(self):
         return self._optimizer.param_groups[0]["lr"]
 

@@ -8,7 +8,6 @@ import math
 import numpy as np
 import torch
 from torch.autograd import Variable
-from torch.functional import norm
 import torch.nn as nn
 
 
@@ -45,7 +44,7 @@ class InstanceNorm(nn.Module):
     def forward(self, inputs, padding_mask):
         """
         Args:
-            inputs (tensor): B x L * E
+            inputs (tensor): B x L x E
         """
         length = (~padding_mask).sum(dim=1, keepdim=True).unsqueeze(1)
         mean = inputs.sum(dim=1, keepdim=True) / length
@@ -65,6 +64,7 @@ class AdaptiveInstanceNorm(nn.Module):
     def forward(self, inputs, mean, std, padding_mask):
         normed, _, _ = self.instance_norm(inputs, padding_mask)
         scaled = std * normed + mean
+        scaled = scaled.masked_fill(padding_mask.unsqueeze(-1), 0)
         return scaled
 
 
@@ -219,14 +219,11 @@ class ResCnn(nn.Module):
             nn.Conv1d(output_dims, output_dims, kernel_size, padding=(kernel_size-1)//2)
         )
 
-        self.use_residual = input_dims == output_dims
-
     def forward(self, x, padding_mask):
-        residual = x.transpose(2, 1)
-        output = self.conv_block(residual)
-        if self.use_residual:
-            output += residual
+        residual = x
+        output = self.conv_block(x.transpose(2, 1))
         output = output.transpose(2, 1).contiguous()
+        output += residual
         output = output.masked_fill(padding_mask.unsqueeze(-1), 0)
 
         return output
@@ -351,28 +348,29 @@ class UnetEncoderLayer(nn.Module):
         self.norm_layer = InstanceNorm()
 
     def forward(self, inputs, padding_mask):
-        conved = self.conv(inputs, padding_mask)
-        normed, mean, std = self.norm_layer(conved, padding_mask)
-
-        return normed, mean, std
+        normed, mean, std = self.norm_layer(inputs, padding_mask)
+        conved = self.conv(normed, padding_mask)
+    
+        return conved, mean, std
 
 
 class UnetEncoder(nn.Module):
     def __init__(self, mel_dims, embed_dims, kernel_sizes, layers, dropout=0.1):
         super().__init__()
-        encoder_layers = [UnetEncoderLayer(mel_dims, embed_dims, kernel_sizes[0], dropout)]
-        for i in range(1, layers):
-            encoder_layers.append(UnetEncoderLayer(embed_dims, embed_dims, kernel_sizes[i], dropout))
-        self.encoder_layers = nn.ModuleList(encoder_layers)
+        self.projection = nn.Linear(mel_dims, embed_dims)
+        self.encoder_layers = nn.ModuleList([
+            UnetEncoderLayer(embed_dims, embed_dims, kernel_sizes[i], dropout)
+            for i in range(layers)
+        ])
 
     def forward(self, inputs, padding_mask):
-        encoder_output = inputs
+        encoder_output = self.projection(inputs)
         means = []
         stds = []
         for _, layer in enumerate(self.encoder_layers):
             encoder_output, mean, std = layer(encoder_output, padding_mask)
-            means.append(mean)
-            stds.append(std)
+            means.insert(0, mean)
+            stds.insert(0, std)
 
         return encoder_output, means, stds
 
@@ -620,35 +618,20 @@ class ConvSpeakerEncoder(nn.Module):
         return torch.cat([part1, part2], dim=1)
 
 
-class PhonemeEncoder(nn.Module):
-    def __init__(self, vocab_size, embed_dims, kernel_size, dropout=0.1, padding_idx=1):
-        super().__init__()
-        # self.embedding = nn.Embedding(vocab_size, embed_dims, padding_idx=padding_idx)
-        self.conv_block = nn.Sequential(
-            nn.Dropout(dropout),
-            SepConv(embed_dims, embed_dims, kernel_size, padding=(kernel_size-1)//2),
-            nn.ReLU(),
-            SepConv(embed_dims, embed_dims, kernel_size, padding=(kernel_size-1)//2)
-        )
-
-    def forward(self, phonemes):
-        # phoneme_embedding = self.embedding(phonemes)
-        return self.conv_block(phonemes)
-
-
 if __name__ == "__main__":
     ins = InstanceNorm()
 
-    s = torch.rand((2, 2))
-    input = torch.rand((2, 5, 2))
-    
+    input = torch.rand((2, 2, 4))
+
     print(input)
-    out1, m, s = ins(input)
+
+    mask = torch.tensor([[0, 0], [0, 0]], dtype=torch.bool)
+    out1, m, s = ins(input, mask)
     
     print(out1)
 
     adain = AdaptiveInstanceNorm()
 
-    out2 = adain(input, m, s)
+    out2 = adain(input, m, s, mask)
 
     print(out2)

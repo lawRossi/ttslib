@@ -81,7 +81,9 @@ class UnetSpeechLoss(FastSpeechLoss):
         duration_targets = normed_duration_targets.masked_select(mask)
         duration_loss = self.mse(duration_preds, duration_targets)
 
-        content_loss = self.mse(outputs["encodings"], outputs["mel_encodings"])
+        phonme_encodings = outputs["encodings"].masked_select(mel_mask)
+        mel_encodings = outputs["mel_encodings"].masked_select(mel_mask)
+        content_loss = self.mse(phonme_encodings, mel_encodings)
 
         losses = {
             "total_loss": mel_loss + duration_loss + content_loss,
@@ -89,7 +91,7 @@ class UnetSpeechLoss(FastSpeechLoss):
             "duration_loss": duration_loss,
             "content_loss": content_loss
         }
-        
+
         return losses
 
     def _normalize_durations(self, durations, padding_mask):

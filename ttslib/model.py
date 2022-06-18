@@ -3,10 +3,8 @@
 Created At: 2022-04-17
 """
 
-from turtle import forward
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from ttslib.layers import AdaptiveDocoder, ConvSpeakerEncoder, Decoder, Encoder, UnetDocoder, UnetEncoder
 from ttslib.layers import FCSpeakerEncoder, VarianceAdaptor
@@ -182,10 +180,11 @@ class AdaSpeech(FastSpeech):
 
 
 class UnetSpeech(FastSpeech):
-    
+
     def __init__(self, model_config):
         super().__init__(model_config)
         self._init_mel_encoder(model_config)
+        self._load_pretrained_encoder(model_config)
 
     def _init_decoder(self, model_config):
         embed_dims = model_config["embed_dims"]
@@ -207,6 +206,14 @@ class UnetSpeech(FastSpeech):
     
     def _init_loss(self, model_config):
         self.loss_func = UnetSpeechLoss()
+
+    def _load_pretrained_encoder(self, model_config):
+        pretrained_state_dict = torch.load(model_config["encoder"]["pretrained_model"])["model"]
+        state_dict = self.state_dict()
+        for key in pretrained_state_dict.keys():
+            if key.startswith("encoder"):
+                state_dict[key] = pretrained_state_dict[key]
+        self.load_state_dict(state_dict)
 
     def forward(self, mels, phonemes, durations, **kwargs):
         encodings, padding_mask = self.encoder(phonemes)
@@ -250,7 +257,7 @@ if __name__ == "__main__":
 
     # model_config = yaml.load(open("data/ada_model_config.yaml"), Loader=yaml.FullLoader)
     # model = AdaSpeech(model_config)
-    
+
     model_config = yaml.load(open("data/unet_model_config.yaml"), Loader=yaml.FullLoader)
     model = UnetSpeech(model_config)
 

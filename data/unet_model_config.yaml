@@ -17,6 +17,7 @@ use_existing_speaker_vectors: false
 encoder:
   model_type: "GLU"
   kernel_sizes: [5, 5, 5, 5]
+  pretrained_model: "data/checkpoint/checkpoint.pt"
   layers: 4
   dropout: 0.1
 

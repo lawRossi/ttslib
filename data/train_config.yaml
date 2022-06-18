@@ -1,0 +1,42 @@
+model: "ttslib.model.UnetSpeech"
+
+device: "cpu"
+
+batch_size: 32
+
+train_steps: 20000
+
+fine_tuning_start: 60000
+
+adaptive_training: false
+
+save_steps: 1000
+
+log_steps: 50
+
+eval_epoch: 0
+
+data_dir: "data"
+
+output_dir: "output"
+
+restore_path: "output/checkpoint_4500"
+
+frozen_layers: ["encoder"]
+
+adaptation_speakers: ["SSB0005", "SSB0080", "chenyixun", "lijian", "meizi1", "meiz2"]
+
+optimizer:
+  betas: [0.9, 0.98]
+  eps: 0.000000001
+  weight_decay: 0.0
+  grad_clip_thresh: 1.0
+  warm_up_step: 6000
+  anneal_steps: [300000, 400000, 500000]
+  anneal_rate: 0.3
+  init_lr: 0.05
+  fine_tuning_lr: 0.008
+
+model_config_file: "data/unet_model_config.yaml"
+
+preprocess_config_file: "data/preprocess.yaml"

@@ -175,10 +175,7 @@ class Trainer:
             self.train_logger.add_scalar(loss_name, loss, step)
 
     def _log_model(self, model, batch, step):
-        if "durations" in batch.fields:
-            duration = int(batch.durations[0].sum().item())
-        else:
-            duration = batch.mel_lens[0].item()
+        duration = int(batch.durations[0].sum().item())
         target_mel = batch.mels[0][:duration].cpu()
         fig = plot_spectrogram(target_mel)
         self.train_logger.add_figure("target_mel", fig, step)
