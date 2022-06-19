@@ -226,6 +226,5 @@ if __name__ == "__main__":
 
     data_iter = BucketIterator(eval_data, 2)
     for b in data_iter:
-        print(b.phonemes)
-        print(b.mels.shape)
+        print(b.mels)
         break
