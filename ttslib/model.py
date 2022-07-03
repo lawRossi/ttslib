@@ -6,8 +6,8 @@ Created At: 2022-04-17
 import torch
 import torch.nn as nn
 
-from ttslib.layers import AdaptiveDocoder, ConvSpeakerEncoder, Decoder, Encoder, UnetDocoder, UnetEncoder
-from ttslib.layers import FCSpeakerEncoder, VarianceAdaptor
+from ttslib.layers import AdaptiveDocoder, ConvSpeakerEncoder, Decoder, Encoder
+from ttslib.layers import FCSpeakerEncoder, VarianceAdaptor, UnetDocoder, UnetEncoder
 from ttslib.loss import FastSpeechLoss, UnetSpeechLoss
 
 
@@ -19,6 +19,7 @@ class SynthesisModel(nn.Module):
         self._init_variance_adaptor(model_config)
         self._init_speaker_embedding(model_config)
         self._init_loss(model_config)
+        self.fine_tuning = False
 
     def _init_encoder(self, model_config):
         pass
@@ -40,11 +41,14 @@ class SynthesisModel(nn.Module):
                 layers = model_config["speaker_encoder"]["layers"]
                 self.speaker_embedding = FCSpeakerEncoder(embed_dims, vector_dims, layers)
         else:
-            num_speakers = model_config["num_speakers"] 
+            num_speakers = model_config["num_speakers"]
             self.speaker_embedding = nn.Embedding(num_speakers, embed_dims)
 
     def _init_loss(self, model_config):
         self.loss_func = FastSpeechLoss()
+
+    def start_fine_tuning(self):
+        self.fine_tuning = True
 
     def forward(self, mels, phonemes, speakers, durations, pitch=None, energy=None):
         encoder_output, padding_mask = self.encoder(phonemes)
@@ -81,7 +85,7 @@ class SynthesisModel(nn.Module):
             mels.append(mel)
 
         return mels
-    
+
     def _compute_mel_padding_mask(self, mels, durations):
         decoder_seq_len = mels.shape[1]
         device = mels.device
@@ -112,7 +116,7 @@ class FastSpeech(SynthesisModel):
         padding_idx = model_config["encoder"].get("padding_idx", 0)
         model_type = model_config["encoder"]["model_type"]
         self.encoder = Encoder(
-            vocab_size, embed_dims, kernel_sizes, num_heads, hidden_dims, 
+            vocab_size, embed_dims, kernel_sizes, num_heads, hidden_dims,
             layers, max_seq_len, dropout, padding_idx, model_type
         )
 
@@ -185,6 +189,9 @@ class UnetSpeech(FastSpeech):
         super().__init__(model_config)
         self._init_mel_encoder(model_config)
         self._load_pretrained_encoder(model_config)
+        self.use_fgm = model_config.get("use_fgm", False)
+        if self.use_fgm:
+            self.attack_loss_func = nn.SmoothL1Loss(beta=0.01)
 
     def _init_decoder(self, model_config):
         embed_dims = model_config["embed_dims"]
@@ -203,11 +210,13 @@ class UnetSpeech(FastSpeech):
         layers = model_config["mel_encoder"]["layers"]
         dropout = model_config["mel_encoder"]["dropout"]
         self.mel_encoder = UnetEncoder(mel_dims, embed_dims, kernel_sizes, layers, dropout)
-    
+
     def _init_loss(self, model_config):
         self.loss_func = UnetSpeechLoss()
 
     def _load_pretrained_encoder(self, model_config):
+        if not model_config["encoder"]["pretrained_model"]:
+            return
         pretrained_state_dict = torch.load(model_config["encoder"]["pretrained_model"])["model"]
         state_dict = self.state_dict()
         for key in pretrained_state_dict.keys():
@@ -225,11 +234,31 @@ class UnetSpeech(FastSpeech):
         mel_encodings, means, stds = self.mel_encoder(mels, mel_padding_mask)
 
         mel_preds = self.decoder(outputs["encodings"], means, stds, mel_padding_mask)
-
+        if self.use_fgm:
+            mel_encodings.retain_grad()
         outputs["mel_encodings"] = mel_encodings
         outputs["mel_preds"] = mel_preds
+        outputs["means"] = means
+        outputs["stds"] = stds
+        outputs["mels"] = mels
+        outputs["durations"] = durations
+        outputs["mel_padding_mask"] = mel_padding_mask
+        outputs["padding_mask"] = padding_mask
 
-        return self.loss_func(mels, durations, padding_mask, outputs)
+        return self.loss_func(outputs)
+
+    def attack(self, outputs):
+        norm = torch.norm(outputs["mel_encodings"].grad)
+        noise = outputs["mel_encodings"].grad / norm
+        encodings = outputs["encodings"] + noise
+        means = outputs["means"]
+        stds = outputs["stds"]
+        mel_padding_mask = outputs["mel_padding_mask"]
+        mel_preds = self.decoder(encodings, means, stds, mel_padding_mask)
+        mask = (~mel_padding_mask).unsqueeze(-1)
+        mel_preds = mel_preds.masked_select(mask)
+        mel_targets = outputs["mels"].masked_select(mask)
+        return self.attack_loss_func(mel_preds, mel_targets)
 
     def inference(self, mels, phonemes, durations, d_control=1.0, **kwargs):
         encodings, padding_mask = self.encoder(phonemes)
@@ -251,6 +280,22 @@ class UnetSpeech(FastSpeech):
 
         return mels
 
+    def teacher_forcing_inference(self, mels, durations, phonemes=None):
+        mel_padding_mask = self._compute_mel_padding_mask(mels, durations)
+        mel_encodings, means, stds = self.mel_encoder(mels, mel_padding_mask)
+
+        if phonemes is not None:
+            encodings, padding_mask = self.encoder(phonemes)
+            decoder_seq_len = mels.shape[1]
+            outputs = self.variance_adaptor(
+                encodings, durations, None, None, decoder_seq_len, padding_mask
+            )
+            mel_preds = self.decoder(outputs["encodings"], means, stds, mel_padding_mask)
+        else:
+            mel_preds = self.decoder(mel_encodings, means, stds, mel_padding_mask)
+
+        return mel_preds
+
 
 if __name__ == "__main__":
     import yaml
@@ -269,9 +314,8 @@ if __name__ == "__main__":
     mels = torch.rand((2, 50, 80))
     speakers = torch.tensor([1, 2], dtype=torch.long)
     durations = torch.tensor([[1, 3, 5, 3, 4], [3, 2, 4, 5, 2]])
-    #pitch = torch.rand((2, 5))
+    # pitch = torch.rand((2, 5))
 
     print(model.forward(mels, phonemes, durations))
 
     print(model.inference(mels, phonemes, durations))
-

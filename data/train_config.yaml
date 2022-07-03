@@ -1,16 +1,16 @@
-model: "ttslib.model.UnetSpeech"
+model: "ttslib.model.AdaSpeech"
 
 device: "cpu"
 
 batch_size: 32
 
-train_steps: 20000
+train_steps: 80000
 
-fine_tuning_start: 60000
+fine_tuning_start: 80000
 
 adaptive_training: false
 
-save_steps: 1000
+save_steps: 4000
 
 log_steps: 50
 
@@ -20,9 +20,9 @@ data_dir: "data"
 
 output_dir: "output"
 
-restore_path: "output/checkpoint_4500"
+restore_path: null
 
-frozen_layers: ["encoder"]
+frozen_layers: []
 
 adaptation_speakers: ["SSB0005", "SSB0080", "chenyixun", "lijian", "meizi1", "meiz2"]
 
@@ -37,6 +37,6 @@ optimizer:
   init_lr: 0.05
   fine_tuning_lr: 0.008
 
-model_config_file: "data/unet_model_config.yaml"
+model_config_file: "data/ada_model_config.yaml"
 
 preprocess_config_file: "data/preprocess.yaml"

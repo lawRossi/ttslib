@@ -63,7 +63,7 @@ def window_sumsquare(
     # Fill the envelope
     for i in range(n_frames):
         sample = i * hop_length
-        x[sample : min(n, sample + n_fft)] += win_sq[: max(0, min(n_fft, n - sample))]
+        x[sample: min(n, sample + n_fft)] += win_sq[: max(0, min(n_fft, n - sample))]
     return x
 
 
@@ -122,7 +122,7 @@ def compute_pictch(audio, sampling_rate, hop_length, durations=None):
         bounds_error=False,
     )
     pitch = interp_fn(np.arange(0, len(pitch)))
-    
+
     if durations is None:
         return pitch
 
@@ -159,7 +159,7 @@ def compute_mel_spectrogram_and_energy(audio, stft_cls, durations=None):
     energy = energy[:sum(durations)]
     pos = 0
     for i, d in enumerate(durations):
-        energy[i] = np.mean(energy[pos : pos + d])
+        energy[i] = np.mean(energy[pos: pos + d])
         pos += d
     energy = energy[:len(durations)]
     mel_spectrogram = mel_spectrogram.T
@@ -180,9 +180,6 @@ def inv_mel_spec(mel, stft_cls, griffin_iters=60):
     )
     audio = audio.squeeze()
     return audio
-    # audio = audio.cpu().numpy()
-    # audio_path = out_filename
-    # write(audio_path, stft_cls.sampling_rate, audio)
 
 
 class STFT(torch.nn.Module):

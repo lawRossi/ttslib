@@ -18,12 +18,10 @@ from loguru import logger
 import numpy as np
 import pickle
 import tgt
-import torch
 import yaml
 
-from ttslib.audio_processing import compute_mel_spectrogram_and_energy, get_mel_from_wav
+from ttslib.audio_processing import compute_mel_spectrogram_and_energy, compute_pictch
 from ttslib.audio_processing import TacotronSTFT
-from ttslib.synthesizer import Synthesizer
 
 
 class Worker(Process):
@@ -184,8 +182,11 @@ def preprocess(config):
 
     logger.info("finished building cache")
 
+    cache_dir = os.path.join(output_dir, "cache")
+    pitch_mean, pitch_std = compute_stats(cache_dir)
+    logger.info(f"pitch -- mean:{pitch_mean} std:{pitch_std}")
     eval_size = config["eval_set_size"]
-    train_test_split(output_dir, eval_size)
+    normalize_pitch_energy(output_dir, pitch_mean, pitch_std, eval_size)
 
     logger.info("finished preprocessing")
 
@@ -219,6 +220,7 @@ def build_cache(samples, stft_cls, config):
 
 def process_sample(stft_cls, sample, config):
     sampling_rate = config["audio"]["sampling_rate"]
+    hop_length = config["stft"]["hop_length"]
     max_mel_len = config["max_mel_len"]
 
     durations = sample.get("durations")
@@ -229,7 +231,10 @@ def process_sample(stft_cls, sample, config):
     audio, _ = librosa.load(audio_file, sr=sampling_rate)
     if "start" in sample:
         audio = audio[sample["start"]:sample["end"]]
-
+    pitch = compute_pictch(audio, sampling_rate, hop_length, durations)
+    if pitch is None:
+        logger.warning(f"invalid pitch for audio: {audio_file}")
+        return None
     mel_spectrogram, _ = compute_mel_spectrogram_and_energy(audio, stft_cls, durations)
     if mel_spectrogram is None:
         logger.warning(f"invalid mel spectrogram for audio: {audio_file}")
@@ -241,6 +246,7 @@ def process_sample(stft_cls, sample, config):
     result = {
         "phonemes": " ".join(sample["phonemes"]),
         "speaker": sample["speaker"],
+        "pitch": pitch,
         "mels": mel_spectrogram
     }
     if durations is not None:
@@ -249,19 +255,25 @@ def process_sample(stft_cls, sample, config):
     return result
 
 
-def train_test_split(output_dir, eval_set_size):
+def normalize_pitch_energy(output_dir, pitch_mean, pitch_std, eval_set_size):
     cache_dir = os.path.join(output_dir, "cache")
     train_db_dir = os.path.join(output_dir, "train")
     eval_db_dir = os.path.join(output_dir, "eval")
 
     with lmdb.open(cache_dir, map_size=int(1e11)) as env:
         with env.begin(write=False) as txn:
+            max_pitch = -100
+            min_pitch = 10000
             train_buffer = []
             eval_buffer = []
             train_idx = 0
             eval_idx = 0
             for _, sample in txn.cursor():
                 sample = pickle.loads(sample)
+                sample["pitch"] = (sample["pitch"] - pitch_mean) / pitch_std
+                max_pitch = max(max_pitch, max(sample["pitch"]))
+                min_pitch = min(min_pitch, min(sample["pitch"]))
+                convert_sample(sample)
                 if random.random() < eval_set_size:
                     eval_buffer.append((struct.pack(">I", eval_idx), sample))
                     eval_idx += 1
@@ -276,6 +288,43 @@ def train_test_split(output_dir, eval_set_size):
                         train_buffer.clear()
             dump_data(train_buffer, train_db_dir)
             dump_data(eval_buffer, eval_db_dir)
+            logger.info(f"pitch -- min: {min_pitch} max: {max_pitch}")
+
+
+def array2str(array):
+    return " ".join(str(value) for value in array)
+
+
+def convert_sample(sample):
+    if "durations" in sample:
+        sample["durations"] = array2str(sample["durations"])
+    sample["pitch"] = array2str(sample["pitch"])
+
+
+def compute_stats(cache_dir):
+    with lmdb.open(cache_dir, map_size=int(1e11)) as env:
+        pitch_values = []
+        with env.begin(write=False) as txn:
+            for _, v in txn.cursor():
+                v = pickle.loads(v)
+                pitch_values.extend(v["pitch"])
+
+    pitch_values = remove_outliers(pitch_values)
+    pitch_mean = pitch_values.mean()
+    pitch_std = pitch_values.std()
+
+    return pitch_mean, pitch_std
+
+
+def remove_outliers(values):
+    values = np.array(values)
+    p25 = np.percentile(values, 25)
+    p75 = np.percentile(values, 75)
+    lower = p25 - 1.5 * (p75 - p25)
+    upper = p75 + 1.5 * (p75 - p25)
+    normal_indices = np.logical_and(values > lower, values < upper)
+
+    return values[normal_indices]
 
 
 def build_references(config, speakers, save_file):
@@ -312,45 +361,10 @@ def build_references(config, speakers, save_file):
         pickle.dump(references, fo)
 
 
-def generate_melgan_data(config, model_dir, save_dir):
-    synthesizer = Synthesizer(model_dir)
-    stft = TacotronSTFT(
-        config["stft"]["filter_length"],
-        config["stft"]["hop_length"],
-        config["stft"]["win_length"],
-        config["mel"]["n_mel_channels"],
-        config["audio"]["sampling_rate"],
-        config["mel"]["mel_fmin"],
-        config["mel"]["mel_fmax"],
-    )
-    n = 0
-    with open(config["alignment_file"]) as fi:
-        with torch.no_grad():
-            for line in fi:
-                sample = json.loads(line)
-                phonemes = sample["phonemes"]
-                audio, _ = librosa.load(sample["audio_file"], None)
-                audio = audio[sample["start"]: sample["end"]]
-                reference_mels, _ = get_mel_from_wav(audio, stft)
-                reference_durations = sample["durations"]
-                reference_mels = reference_mels.transpose(1, 0)
-                pred_mels1 = synthesizer.teacher_forcing_generate(reference_mels, reference_durations)
-                # pred_mels2 = synthesizer.teacher_forcing_generate(reference_mels, reference_durations, phonemes)
-
-                filename = Path(sample["audio_file"]).name
-                np.save(os.path.join(save_dir, filename.replace('.wav', '.npy')), reference_mels.transpose(1, 0))
-                np.save(os.path.join(save_dir, filename.replace('.wav', '_1.npy')), pred_mels1[0].transpose(1, 0))
-                # np.save(os.path.join(save_dir, filename.replace('.wav', '_2.npy')), pred_mels2[0].transpose(1, 0))
-
-                n += 1
-                if n % 1000 == 0:
-                    print(f"{n} samples processed")
-
-
 if __name__ == "__main__":
     set_start_method("spawn")
 
-    config = yaml.load(open("data/preprocess.yaml"), Loader=yaml.FullLoader)
+    config = yaml.load(open("data/local_preprocess.yaml"), Loader=yaml.FullLoader)
     print(config)
     # parse_alignment(config)
 
@@ -358,8 +372,10 @@ if __name__ == "__main__":
 
     # prepare_aligning_speech_alignments(config)
 
-    # preprocess(config)
+    preprocess(config)
 
     # dump_speaker_vectors("data/speakers", "data/speakers.json")
 
-    generate_melgan_data(config, "data/checkpoint", "data/mels")
+    # env = lmdb.open("data/train", map_size=int(1e11))
+    # txn1 = env.begin()
+    # print(txn1.stat()["entries"])

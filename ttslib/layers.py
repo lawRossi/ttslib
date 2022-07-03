@@ -82,7 +82,7 @@ class PositionalEmbedding(nn.Module):
 
         pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
- 
+
     def forward(self, x):
         x = x * math.sqrt(self.embed_dims)
         seq_len = x.size(1)
@@ -109,7 +109,7 @@ class QuantizationEmbedding(nn.Module):
                 requires_grad=False,
             )
         self.embedding = nn.Embedding(n_bins, embed_dims)
-    
+
     def forward(self, x):
         return self.embedding(torch.bucketize(x, self.bins))
 
@@ -139,7 +139,7 @@ class PositionwiseFeedForward(nn.Module):
             kernel_size=kernel_sizes[0],
             padding=(kernel_sizes[0] - 1) // 2,
         )
-        
+
         self.conv_2 = SepConv(
             d_hid,
             d_in,
@@ -232,7 +232,7 @@ class ResCnn(nn.Module):
 class Encoder(nn.Module):
 
     def __init__(self, vocab_size, embed_dims, kernel_sizes, num_heads=None, hidden_dims=None,
-            layers=4, max_seq_len=300, dropout=0.1, padding_idx=0, model_type="FFT"):
+                 layers=4, max_seq_len=300, dropout=0.1, padding_idx=0, model_type="FFT"):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dims, padding_idx=padding_idx)
         if model_type == "FFT":
@@ -268,7 +268,7 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
 
     def __init__(self, embed_dims, kernel_sizes, output_dims, num_heads=None, hidden_dims=None,
-            layers=4, max_seq_len=1000, dropout=0.1, model_type="FFT"):
+                 layers=4, max_seq_len=1000, dropout=0.1, model_type="FFT"):
         super().__init__()
         if model_type == "FFT":
             self.pos_embedding = PositionalEmbedding(embed_dims, max_seq_len)
@@ -332,7 +332,7 @@ class AdaptiveDocoder(nn.Module):
         ])
 
         self.linear = nn.Linear(embed_dims, output_dims)
-    
+
     def forward(self, inputs, padding_mask, speaker_encodings):
         decoder_output = inputs
         for _, layer in enumerate(self.layers):
@@ -350,7 +350,7 @@ class UnetEncoderLayer(nn.Module):
     def forward(self, inputs, padding_mask):
         normed, mean, std = self.norm_layer(inputs, padding_mask)
         conved = self.conv(normed, padding_mask)
-    
+
         return conved, mean, std
 
 
@@ -411,7 +411,7 @@ class UnetDocoder(nn.Module):
 class StopGradient(nn.Module):
     def __init__(self):
         super().__init__()
-    
+
     def forward(self, x):
         output = torch.clone(x).detach()
         output.requires_grad = False
@@ -454,7 +454,7 @@ class LengthRegulator(nn.Module):
             encoder_output (torch.Tensor): shape (B, L_enc, E)
             durations (torch.Tensor): shape (B, L_enc)
             max_decoder_seq_len (int): maximum sequence length of decoder input
-        
+
         Returns:
             expanded encoder output: tensor with shape (B, L_dec, E)
         """
@@ -513,7 +513,7 @@ class VarianceAdaptor(nn.Module):
             self.pitch_embedding = QuantizationEmbedding(min_pitch, max_pitch, n_bins, embed_dims, method)  
 
     def forward(self, encoder_output, durations, pitch=None, energy=None, decoder_seq_len=None, padding_mask=None):
-    
+
         if self.use_pitch:
             pitch_emb = self.pitch_embedding(pitch)
             pitch_emb = pitch_emb.masked_fill(padding_mask.unsqueeze(-1), 0)
@@ -522,7 +522,7 @@ class VarianceAdaptor(nn.Module):
         else:
             pitch_preds = None
 
-        if energy is not None :
+        if energy is not None:
             energy_emb = self.energy_embedding(energy)
             energy_emb = energy_emb.masked_fill(padding_mask, 0)
             encoder_output = encoder_output + energy_emb
@@ -535,28 +535,31 @@ class VarianceAdaptor(nn.Module):
         expanded_encoder_output = self.length_regulator(encoder_output, durations, decoder_seq_len)
 
         return {
-            "encodings": expanded_encoder_output, 
-            "duration_preds": duration_preds, 
-            "pitch_preds": pitch_preds, 
+            "encodings": expanded_encoder_output,
+            "duration_preds": duration_preds,
+            "pitch_preds": pitch_preds,
             "energy_preds": energy_preds
         }
 
     def inference(self, encoder_output, d_control, p_control, e_control, padding_mask, decoder_max_seq_len,
-            reference_durations=None):
+                  reference_durations=None):
         if self.use_pitch:
             pitch_preds = self.pitch_predictor(encoder_output, padding_mask) * p_control
             pitch_emb = self.pitch_embedding(pitch_preds)
-            encoder_output = encoder_output + pitch_emb 
+            pitch_emb = pitch_emb.masked_fill(padding_mask.unsqueeze(-1), 0)
+            encoder_output = encoder_output + pitch_emb
         if self.use_energy:
             energy_preds = self.energy_predictor(encoder_output, padding_mask) * e_control
             energy_emb = self.energy_embedding(energy_preds)
+            energy_emb = energy_emb.masked_fill(padding_mask, 0)
             encoder_output = encoder_output + energy_emb
 
         duration_preds = self.duration_predictor(encoder_output, padding_mask)
         if reference_durations is not None:
-            duration_rounded = self.rectify_durations(duration_preds, reference_durations)
+            duration_rounded = self.rectify_durations(duration_preds, reference_durations, padding_mask)
         else:
-            duration_rounded = self._clamp_duration_preds(duration_preds, d_control).masked_fill(padding_mask, 0)
+            duration_rounded = self._clamp_duration_preds(duration_preds, padding_mask, d_control)
+            duration_rounded = duration_rounded.masked_fill(padding_mask, 0)
         decoder_seq_len = duration_rounded.sum(axis=1).max().item()
         if decoder_max_seq_len is not None:
             decoder_seq_len = min(decoder_seq_len, decoder_max_seq_len)
@@ -564,10 +567,8 @@ class VarianceAdaptor(nn.Module):
 
         return expanded_eocoder_output, duration_rounded
 
-    def rectify_durations(self, duration_preds, reference_durations):
-        padding_mask = reference_durations == 0
-        reference_durations = reference_durations.float()
-        length = (~padding_mask).sum(dim=1, keepdim=True)
+    def rectify_durations(self, duration_preds, reference_durations, padding_mask):
+        length = (reference_durations != 0).sum(dim=1, keepdim=True)
         mean = reference_durations.sum(dim=1, keepdim=True) / length
         vars = ((reference_durations - mean) ** 2).sum(dim=1, keepdim=True) / length
         std = vars.sqrt()
@@ -627,7 +628,7 @@ if __name__ == "__main__":
 
     mask = torch.tensor([[0, 0], [0, 0]], dtype=torch.bool)
     out1, m, s = ins(input, mask)
-    
+
     print(out1)
 
     adain = AdaptiveInstanceNorm()

@@ -114,14 +114,16 @@ class BucketIterator(Iterator):
         return example_idxs
 
     def create_batches(self):
-        self.batches = self.pool(self.batch_size,
+        self.batches = self.pool(
+            self.batch_size,
             self.sort_key, self.batch_size_fn,
             random_shuffler=self.random_shuffler,
             shuffle=self.shuffle,
-            sort_within_batch=self.sort_within_batch)
+            sort_within_batch=self.sort_within_batch
+        )
 
     def pool(self, batch_size, key, batch_size_fn=lambda new, count, sofar: count,
-         random_shuffler=None, shuffle=False, sort_within_batch=False):
+             random_shuffler=None, shuffle=False, sort_within_batch=False):
         """Sort within buckets, then batch, then shuffle batches.
 
         Partitions data into chunks of size 100*batch_size, sorts examples within
@@ -146,8 +148,10 @@ class BucketIterator(Iterator):
 def tokenize(text):
     return text.split(" ")
 
+
 def tokenize_int(text):
     return [int(split) for split in text.split(" ")]
+
 
 def tokenize_float(text):
     return [float(split) for split in text.split(" ")]
@@ -161,7 +165,7 @@ def load_dataset(cache_dir, speaker_vector_file=None, use_pitch=True):
         speakers = Field(use_vocab=False, batch_first=True, dtype=torch.float)
     mel_nested = Field(use_vocab=False, batch_first=True, pad_token=0.0, dtype=torch.float)
     mels = NestedField(mel_nested, use_vocab=False)
-    durations = Field(tokenize=tokenize_int, use_vocab=False, pad_token=0, batch_first=True, dtype=torch.int32)
+    durations = Field(use_vocab=False, pad_token=0, batch_first=True, dtype=torch.int32)
 
     fields = OrderedDict({
         "phonemes": ("phonemes", phonemes),
@@ -169,7 +173,7 @@ def load_dataset(cache_dir, speaker_vector_file=None, use_pitch=True):
         "mels": ("mels", mels),
         "durations": ("durations", durations)
     })
-    
+
     if use_pitch:
         pitch = Field(tokenize=tokenize_float, use_vocab=False, pad_token=0, batch_first=True, dtype=torch.float)
         fields["pitch"] = ("pitch", pitch)
@@ -205,7 +209,7 @@ def load_adaptation_dataset(cache_dir, checkpoint_dir, speaker_vector_file, spea
         "speakers": ("speakers", speakers),
         "mels": ("mels", mels)
     })
-    
+
     train_dir = os.path.join(cache_dir, "train")
     eval_dir = os.path.join(cache_dir, "eval")
     train_data = AdaptationDataset(train_dir, fields, speaker_vector_file, speaker_list)
@@ -217,7 +221,7 @@ def load_adaptation_dataset(cache_dir, checkpoint_dir, speaker_vector_file, spea
 if __name__ == "__main__":
     # train_data, eval_data = load_adaptation_dataset("data", "data/checkpoint", "data/speakers.pkl", ["SSB0005", "SSB0080"])
 
-    train_data, eval_data = load_dataset("data")
+    train_data, eval_data = load_dataset("data", use_pitch=False)
     # data_iter = BucketIterator(train_data, 32, shuffle=True, sort_key="mels")
     # print(len(train_data), len(eval_data), len(train_data)+len(eval_data))
     # for b in data_iter:
@@ -226,5 +230,6 @@ if __name__ == "__main__":
 
     data_iter = BucketIterator(eval_data, 2)
     for b in data_iter:
+        print(b.durations)
         print(b.mels)
         break

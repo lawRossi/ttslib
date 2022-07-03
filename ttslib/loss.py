@@ -11,10 +11,10 @@ class FastSpeechLoss(nn.Module):
     def __init__(self):
         super().__init__()
         self.mse = nn.MSELoss()
-        self.mae = nn.SmoothL1Loss(beta=0.01)
+        self.mae = nn.SmoothL1Loss(beta=0.001)
 
     def forward(self, mel_targets, duration_targets, pitch_targets, energy_targets,
-           outputs, padding_mask):
+                outputs, padding_mask):
         mel_preds = outputs["mel_preds"]
         duration_preds = outputs["duration_preds"]
         pitch_preds = outputs["pitch_preds"]
@@ -31,7 +31,7 @@ class FastSpeechLoss(nn.Module):
         duration_loss = self.mse(duration_preds, log_duration_targets)
 
         total_loss = mel_loss + duration_loss
-        
+
         losses = {
             "total_loss": total_loss,
             "mel_loss": mel_loss,
@@ -42,7 +42,7 @@ class FastSpeechLoss(nn.Module):
             pitch_preds = pitch_preds.masked_select(mask)
             pitch_targets = pitch_targets.masked_select(mask)
             pitch_loss = self.mse(pitch_preds, pitch_targets)
-            losses ["total_loss"] += pitch_loss
+            losses["total_loss"] += pitch_loss
             losses["pitch_loss"] = pitch_loss
 
         if energy_targets is not None:
@@ -64,7 +64,9 @@ class FastSpeechLoss(nn.Module):
 
 class UnetSpeechLoss(FastSpeechLoss):
 
-    def forward(self, mel_targets, duration_targets, padding_mask, outputs):
+    def forward(self, outputs):
+        mel_targets = outputs["mels"]
+        duration_targets = outputs["durations"]
         mel_preds = outputs["mel_preds"]
         duration_preds = outputs["duration_preds"]
 
@@ -73,6 +75,7 @@ class UnetSpeechLoss(FastSpeechLoss):
         mel_preds = mel_preds.masked_select(mel_mask)
         mel_loss = self.mae(mel_preds, mel_targets)
 
+        padding_mask = outputs["padding_mask"]
         mask = ~padding_mask
         duration_preds = duration_preds.masked_select(mask)
         normed_duration_targets = self._normalize_durations(duration_targets, padding_mask)
@@ -89,6 +92,13 @@ class UnetSpeechLoss(FastSpeechLoss):
             "duration_loss": duration_loss,
             "content_loss": content_loss
         }
+
+        mel_preds_ = outputs.get("mel_preds_")
+        if mel_preds_ is not None:
+            mel_preds_ = mel_preds_.masked_select(mel_mask)
+            mel_loss_ = self.mae(mel_preds_, mel_targets)
+            losses["total_loss"] += mel_loss_
+            losses["mel_loss_"] = mel_loss_
 
         return losses
 
@@ -130,8 +140,6 @@ class AligningLoss(nn.Module):
         mask = (~inputs["mel_padding_mask"]).unsqueeze(-1)
         mel_targets = inputs["mels"].masked_select(mask)
         mel_preds = inputs["mel_preds"].masked_select(mask)
-        print(mel_targets.shape)
-        print(mel_preds.shape)
         mel_loss = self.mse(mel_preds, mel_targets)
         losses["total_loss"] = losses["total_loss"] + mel_loss
         losses["mel_loss"] = mel_loss

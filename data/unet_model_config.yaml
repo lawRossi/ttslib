@@ -14,22 +14,24 @@ stop_gradient: true
 
 use_existing_speaker_vectors: false
 
+use_fgm: False
+
 encoder:
   model_type: "GLU"
   kernel_sizes: [5, 5, 5, 5]
-  pretrained_model: "data/checkpoint/checkpoint.pt"
+  pretrained_model: "data/ada_checkpoint/checkpoint.pt"
   layers: 4
   dropout: 0.1
 
 decoder:
-  kernel_sizes: [9, 9, 9, 9]
+  kernel_sizes: [7, 7, 7, 7]
   layers: 4
   output_dims: 80
   dropout: 0.1
 
 mel_encoder:
   mel_dims: 80
-  kernel_sizes: [9, 9, 9, 9]
+  kernel_sizes: [7, 7, 7, 7]
   layers: 4
   dropout: 0.1
 
@@ -43,4 +45,4 @@ variance_predictor:
   quantization_method: "linear"
 
 vocoder:
-  model: hifigan
+  model: melgan

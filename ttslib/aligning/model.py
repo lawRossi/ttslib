@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ttslib.aligning.align import compute_pairwise_distances
+from ttslib.aligning.align import compute_pairwise_distances, get_hard_alignments
 from ttslib.layers import GLUBlock
 from ttslib.loss import AligningLoss
 
@@ -131,6 +131,32 @@ class AligningModel(nn.Module):
         }
 
         return self.loss_func(outputs)
+    
+    def inference(self, mels, phonemes, mel_lens, phoneme_lens):
+        mel_padding_mask = torch.arange(mels.shape[1]) >= mel_lens.unsqueeze(-1)
+        mel_encodings = self.mel_encoder(mels, mel_padding_mask)
+
+        phonemes_ = F.pad(phonemes, [1, 0, 0, 0], value=self.blank_index)
+        phonme_padding_mask = torch.arange(phonemes_.shape[1]) > phoneme_lens.unsqueeze(-1)
+        phoneme_embeddings = self.embedding(phonemes_)
+        phoneme_encodings = self.phoneme_encoder(phoneme_embeddings, phonme_padding_mask)
+
+        distances = compute_pairwise_distances(phoneme_encodings, mel_encodings, phoneme_lens, mel_lens)
+        attention_scores = torch.softmax(distances, dim=2)
+
+        context = torch.bmm(attention_scores, phoneme_encodings)
+
+        encodings = torch.cat([mel_encodings, context], dim=2)
+
+        logits = self.phoneme_decoder(encodings, mel_padding_mask)
+        log_probs = torch.log_softmax(logits, dim=2)
+
+        alignments = get_hard_alignments(log_probs, phonemes, phoneme_lens, mel_lens, self.blank_index)
+
+        durations = []
+        for i, row in enumerate(alignments.numpy().sum(axis=1)):
+            durations.append(row[:phoneme_lens[i]])
+        return durations
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-model: "ttslib.model.LightSpeech"
+model: "ttslib.model.AdaSpeech"
 
 vocab_size: 220
 
@@ -31,8 +31,8 @@ variance_predictor:
   kernel_size: 3
   filter_size: 256
   dropout: 0.5
-  min_pitch: -2.2
-  max_pitch: 11.0
+  min_pitch: -2.8
+  max_pitch: 12.8
   quantization_bins: 256
   quantization_method: "linear"
 

@@ -15,7 +15,7 @@ import yaml
 
 from ttslib.audio_processing import TacotronSTFT, inv_mel_spec
 from ttslib.dataset import load_adaptation_dataset, load_dataset, BucketIterator
-from ttslib.optimizer import FineTuningOptimizer, ScheduledOptimizer
+from ttslib.optimizer import ScheduledOptimizer
 from ttslib.utils import plot_spectrogram, find_class
 
 
@@ -40,7 +40,7 @@ class Trainer:
     def _init_stft(self):
         config_file = self.train_config["preprocess_config_file"]
         config = yaml.load(open(config_file), Loader=yaml.FullLoader)
-        
+
         self.sampling_rate = config["audio"]["sampling_rate"]
         filter_length = config["stft"]["filter_length"]
         hop_length = config["stft"]["hop_length"]
@@ -82,8 +82,7 @@ class Trainer:
                     break
                 if step == self.fine_tuning_start:
                     logger.info("start fine tuning")
-                    optimizer = FineTuningOptimizer(model, self.train_config)
-                    optimizer.current_step = step
+                    model.start_fine_tuning()
 
             if epoch >= self.eval_epoch:
                 self._evaluate(model, eval_dataset, step)
@@ -116,6 +115,10 @@ class Trainer:
             logger.info(f"restore from {checkpoint_path}")
             checkpoint = torch.load(checkpoint_path)
             model.load_state_dict(checkpoint["model"])
+            step = int(checkpoint_path[checkpoint_path.find("_")+1:])
+            if step >= self.fine_tuning_start:
+                logger.info("fine tuning")
+                model.start_fine_tuning()
 
         model.to(self.device)
 
@@ -129,15 +132,7 @@ class Trainer:
 
         checkpoint_path = self.train_config["restore_path"]
         step = int(checkpoint_path[checkpoint_path.find("_")+1:])
-        
-        if step > self.train_config["fine_tuning_start"] or self.adaptive_training:
-            logger.info("fine tuning")
-            optimizer = FineTuningOptimizer(model, self.train_config)
-            optimizer.current_step = step
-        else:   
-            checkpoint = torch.load(checkpoint_path)
-            optimizer.load_state_dict(checkpoint["optimizer"])
-            optimizer.current_step = step
+        optimizer.current_step = step
 
         return optimizer
 
@@ -156,7 +151,7 @@ class Trainer:
                 os.path.dirname(self.train_config["restore_path"]),
                 speaker_vector_file,
                 self.train_config["adaptation_speakers"]
-            )            
+            )
 
         fields = train_dataset.fields
         phonemes = fields.get("phonemes")
@@ -189,7 +184,8 @@ class Trainer:
         try:
             fig = plot_spectrogram(mels[0])
             self.train_logger.add_figure("pred_mel", fig, step)
-        except:
+        except Exception as e:
+            logger.error(e)
             logger.warning("failed to plot pred mel")
 
         target_audio = inv_mel_spec(target_mel.transpose(1, 0), self.stft)
@@ -201,7 +197,8 @@ class Trainer:
             pred_audio = pred_audio / max(abs(pred_audio))
             self.train_logger.add_audio(f"target_audio-{step}", target_audio, step, sample_rate=self.sampling_rate)
             self.train_logger.add_audio(f"pred_audio-{step}", pred_audio, step, sample_rate=self.sampling_rate)
-        except:
+        except Exception as e:
+            logger.error(e)
             logger.warning("fail to generate predicted audio")
 
     def _save_checkpoint(self, model, optimizer):
@@ -216,6 +213,6 @@ class Trainer:
 
 
 if __name__ == "__main__":
-    config = yaml.load(open("data/train_config.yaml"), Loader=yaml.FullLoader)
+    config = yaml.load(open("data/train_unet_config.yaml"), Loader=yaml.FullLoader)
     trainer = Trainer(config)
     trainer.train()
