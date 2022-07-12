@@ -12,6 +12,8 @@ adaptive_training: false
 
 save_steps: 4000
 
+num_checkpoints: 3
+
 log_steps: 50
 
 eval_epoch: 0

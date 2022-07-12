@@ -4,7 +4,9 @@ Created At: 2022-04-18
 """
 
 from collections import defaultdict
+import glob
 import os
+import re
 
 from loguru import logger
 import pickle
@@ -28,6 +30,7 @@ class Trainer:
         self.eval_epoch = train_config["eval_epoch"]
         self.fine_tuning_start = train_config["fine_tuning_start"]
         self.adaptive_training = train_config["adaptive_training"]
+        self.num_checkpoints = train_config["num_checkpoints"]
         self.data_dir = train_config["data_dir"]
         self.output_dir = train_config["output_dir"]
         self.device = train_config["device"]
@@ -55,7 +58,7 @@ class Trainer:
         model = self._prepare_model()
         optimizer = self._prepare_optimizer(model)
         train_dataset, eval_dataset = self._load_datasets()
-        train_data_iter = BucketIterator(train_dataset, self.batch_size, shuffle=True, 
+        train_data_iter = BucketIterator(train_dataset, self.batch_size, shuffle=True,
                                          sort_key="mels", device=self.device)
         step = optimizer.current_step
         losses = defaultdict(float)
@@ -77,6 +80,7 @@ class Trainer:
                     losses.clear()
                 if step % self.save_steps == 0:
                     self._save_checkpoint(model, optimizer)
+                    self._remove_lagacy_checkpoints()
                     self._log_model(model, batch, step)
                 if step == self.train_steps:
                     break
@@ -93,7 +97,7 @@ class Trainer:
 
     def _evaluate(self, model, eval_dataset, step):
         logger.info("evaluation")
-        eval_data_iter = BucketIterator(eval_dataset, self.batch_size, train=False)
+        eval_data_iter = BucketIterator(eval_dataset, self.batch_size, train=False, sort=False)
         model.eval()
         with torch.no_grad():
             mel_loss = 0
@@ -148,9 +152,7 @@ class Trainer:
         else:
             train_dataset, eval_dataset = load_adaptation_dataset(
                 self.data_dir,
-                os.path.dirname(self.train_config["restore_path"]),
-                speaker_vector_file,
-                self.train_config["adaptation_speakers"]
+                os.path.dirname(self.train_config["restore_path"])
             )
 
         fields = train_dataset.fields
@@ -210,6 +212,13 @@ class Trainer:
              },
             os.path.join(self.output_dir, f"checkpoint_{optimizer.current_step}")
         )
+
+    def _remove_lagacy_checkpoints(self):
+        pattern = re.compile("checkpoint_(\d+)")
+        checkpoints = glob.glob(f"{self.output_dir}/checkpoint_*")
+        checkpoints = sorted(checkpoints, key=lambda x: int(pattern.search(x).group(1)), reverse=True)
+        for checkpoint in checkpoints[self.num_checkpoints:]:
+            os.remove(checkpoint)
 
 
 if __name__ == "__main__":

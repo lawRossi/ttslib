@@ -4,6 +4,7 @@ Created At: 2022-04-16
 """
 
 from collections import OrderedDict
+import glob
 from math import floor
 import os.path
 import random
@@ -78,27 +79,15 @@ class TTSDataset(Dataset):
                 yield getattr(example, attr)
 
 
-class AdaptationDataset(TTSDataset):
-    def __init__(self, path, fields, speaker_vector_file, speakers):
-        super().__init__(path, fields, speaker_vector_file)
-
-        self.idxes = []
-
-        for idx, values in self.txn.cursor():
-            values = pickle.loads(values)
-            if values["speaker"] in speakers:
-                self.idxes.append(idx)
-
-        self.num_examples = len(self.idxes)
-
-    def __getitem__(self, i):
-        values = pickle.loads(self.txn.get(self.idxes[i]))
-        if self.speaker_vectors is not None:
-            values["speakers"] = self.speaker_vectors[values["speaker"]]
-        else:
-            values["speakers"] = values["speaker"]
-        example = Example.fromdict(values, self.raw_fields)
-        return example
+class AdaptationDataset(Dataset):
+    def __init__(self, data_dir, fields):
+        examples = []
+        for file in glob.glob(data_dir+"/*"):
+            with open(file, "rb") as fi:
+                example = pickle.load(fi)
+                example["mels"] = example["mels"].transpose(1, 0)
+                examples.append(Example.fromdict(example, fields))
+        super().__init__(examples, fields.values())
 
 
 class BucketIterator(Iterator):
@@ -190,46 +179,36 @@ def load_dataset(cache_dir, speaker_vector_file=None, use_pitch=True):
     return train_dataset, eval_dataset
 
 
-def load_adaptation_dataset(cache_dir, checkpoint_dir, speaker_vector_file, speaker_list):
+def load_adaptation_dataset(data_dir, checkpoint_dir):
     with open(os.path.join(checkpoint_dir, "phonemes.pkl"), "rb") as fi:
         phonemes = pickle.load(fi)
 
-    pitch = Field(tokenize=tokenize_float, use_vocab=False, pad_token=0, batch_first=True, dtype=torch.float)
-    durations = Field(tokenize=tokenize_int, use_vocab=False, pad_token=0, batch_first=True, dtype=torch.int32)
-    if speaker_vector_file is None:
-        speakers = Field(sequential=False, unk_token=None)
-    else:
-        speakers = Field(use_vocab=False, batch_first=True, dtype=torch.float)
+    durations = Field(use_vocab=False, pad_token=0, batch_first=True, dtype=torch.int32)
     mel_nested = Field(use_vocab=False, batch_first=True, pad_token=0.0, dtype=torch.float)
     mels = NestedField(mel_nested, use_vocab=False)
     fields = OrderedDict({
         "phonemes": ("phonemes", phonemes),
-        "pitch": ("pitch", pitch),
         "durations": ("durations", durations),
-        "speakers": ("speakers", speakers),
         "mels": ("mels", mels)
     })
 
-    train_dir = os.path.join(cache_dir, "train")
-    eval_dir = os.path.join(cache_dir, "eval")
-    train_data = AdaptationDataset(train_dir, fields, speaker_vector_file, speaker_list)
-    eval_data = TTSDataset(eval_dir, fields, speaker_vector_file)
+    train_data = AdaptationDataset(data_dir, fields)
 
-    return train_data, eval_data
+    return train_data, train_data
 
 
 if __name__ == "__main__":
-    # train_data, eval_data = load_adaptation_dataset("data", "data/checkpoint", "data/speakers.pkl", ["SSB0005", "SSB0080"])
+    train_data, eval_data = load_adaptation_dataset("data/mels", "data/checkpoint")
 
-    train_data, eval_data = load_dataset("data", use_pitch=False)
+    # train_data, eval_data = load_dataset("data", use_pitch=False)
     # data_iter = BucketIterator(train_data, 32, shuffle=True, sort_key="mels")
     # print(len(train_data), len(eval_data), len(train_data)+len(eval_data))
     # for b in data_iter:
     #     print(b.mels.shape)
     #     print(b.pitch.shape)
 
-    data_iter = BucketIterator(eval_data, 2)
+    data_iter = BucketIterator(eval_data, 2, train=False, sort=False)
     for b in data_iter:
         print(b.durations)
-        print(b.mels)
+        print(b.mels.shape)
         break

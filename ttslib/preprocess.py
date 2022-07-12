@@ -21,9 +21,8 @@ import tgt
 import torch
 import yaml
 
-from ttslib.audio_processing import compute_mel_spectrogram_and_energy, get_mel_from_wav
+from ttslib.audio_processing import compute_mel_spectrogram_and_energy, get_mel_from_audio
 from ttslib.audio_processing import TacotronSTFT
-from ttslib.synthesizer import Synthesizer
 
 
 class Worker(Process):
@@ -312,8 +311,9 @@ def build_references(config, speakers, save_file):
         pickle.dump(references, fo)
 
 
-def generate_melgan_data(config, model_dir, save_dir):
-    synthesizer = Synthesizer(model_dir)
+def generate_adaptation_data(config, alignment_file, save_dir):
+    os.makedirs(save_dir, exist_ok=True)
+
     stft = TacotronSTFT(
         config["stft"]["filter_length"],
         config["stft"]["hop_length"],
@@ -323,28 +323,23 @@ def generate_melgan_data(config, model_dir, save_dir):
         config["mel"]["mel_fmin"],
         config["mel"]["mel_fmax"],
     )
-    n = 0
-    with open(config["alignment_file"]) as fi:
+    with open(alignment_file) as fi:
         with torch.no_grad():
             for line in fi:
                 sample = json.loads(line)
-                phonemes = sample["phonemes"]
+                if not os.path.exists(sample["audio_file"]):
+                    continue
+                sample["phonemes"] = " ".join(sample["phonemes"])
                 audio, _ = librosa.load(sample["audio_file"], None)
                 audio = audio[sample["start"]: sample["end"]]
-                reference_mels, _ = get_mel_from_wav(audio, stft)
-                reference_durations = sample["durations"]
-                reference_mels = reference_mels.transpose(1, 0)
-                pred_mels1 = synthesizer.teacher_forcing_generate(reference_mels, reference_durations)
-                # pred_mels2 = synthesizer.teacher_forcing_generate(reference_mels, reference_durations, phonemes)
+                mels, _ = get_mel_from_audio(audio, stft)
+                sample["mels"] = mels
 
                 filename = Path(sample["audio_file"]).name
-                np.save(os.path.join(save_dir, filename.replace('.wav', '.npy')), reference_mels.transpose(1, 0))
-                np.save(os.path.join(save_dir, filename.replace('.wav', '_1.npy')), pred_mels1[0].transpose(1, 0))
-                # np.save(os.path.join(save_dir, filename.replace('.wav', '_2.npy')), pred_mels2[0].transpose(1, 0))
-
-                n += 1
-                if n % 1000 == 0:
-                    print(f"{n} samples processed")
+                filename = sample["speaker"] + "_" + filename
+                save_file = os.path.join(save_dir, filename.replace('.wav', '.pkl'))
+                with open(save_file, "wb") as fo:
+                    pickle.dump(sample, fo)
 
 
 if __name__ == "__main__":
@@ -362,4 +357,4 @@ if __name__ == "__main__":
 
     # dump_speaker_vectors("data/speakers", "data/speakers.json")
 
-    generate_melgan_data(config, "data/checkpoint", "data/mels")
+    generate_adaptation_data(config, "data/ada_alignments.json", "data/mels")

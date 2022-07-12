@@ -14,7 +14,7 @@ stop_gradient: true
 
 use_existing_speaker_vectors: false
 
-use_fgm: False
+use_adv: True
 
 encoder:
   model_type: "GLU"

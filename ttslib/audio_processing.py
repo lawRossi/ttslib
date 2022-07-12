@@ -139,7 +139,7 @@ def compute_pictch(audio, sampling_rate, hop_length, durations=None):
     return pitch
 
 
-def get_mel_from_wav(audio, stft_cls):
+def get_mel_from_audio(audio, stft_cls):
     audio = torch.clip(torch.FloatTensor(audio).unsqueeze(0), -1, 1)
     audio = torch.autograd.Variable(audio, requires_grad=False)
     melspec, energy = stft_cls.mel_spectrogram(audio)
@@ -149,7 +149,7 @@ def get_mel_from_wav(audio, stft_cls):
 
 
 def compute_mel_spectrogram_and_energy(audio, stft_cls, durations=None):
-    mel_spectrogram, energy = get_mel_from_wav(audio, stft_cls)
+    mel_spectrogram, energy = get_mel_from_audio(audio, stft_cls)
     if durations is None:
         return mel_spectrogram.T, energy
 
