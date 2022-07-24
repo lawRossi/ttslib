@@ -110,38 +110,3 @@ class UnetSpeechLoss(FastSpeechLoss):
         normed_durations = (durations - mean) / std
         normed_durations = normed_durations.masked_fill(padding_mask, 0)
         return normed_durations
-
-
-class AligningLoss(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-        self.ctc = nn.CTCLoss(zero_infinity=True)
-        self.mse = nn.MSELoss()
-
-    def forward(self, inputs):
-        log_probs = inputs["log_probs"]
-        phonemes = inputs["phonemes"]
-        p_lens = inputs["phoneme_lens"]
-        m_lens = inputs["mel_lens"]
-
-        ctc_loss = 0
-        for i in range(log_probs.shape[0]):
-            cur_logprobs = log_probs[i][:m_lens[i], :p_lens[i]+1]
-            ctc_loss += self.ctc(
-                cur_logprobs.unsqueeze(1), phonemes[i][:p_lens[i]], m_lens[i:i+1], p_lens[i:i+1]
-            )
-        ctc_loss /= log_probs.shape[0]
-        losses = {
-            "total_loss": ctc_loss,
-            "ctc_loss": ctc_loss
-        }
-
-        mask = (~inputs["mel_padding_mask"]).unsqueeze(-1)
-        mel_targets = inputs["mels"].masked_select(mask)
-        mel_preds = inputs["mel_preds"].masked_select(mask)
-        mel_loss = self.mse(mel_preds, mel_targets)
-        losses["total_loss"] = losses["total_loss"] + mel_loss
-        losses["mel_loss"] = mel_loss
-
-        return losses

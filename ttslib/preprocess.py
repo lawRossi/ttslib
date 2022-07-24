@@ -311,7 +311,7 @@ def build_references(config, speakers, save_file):
         pickle.dump(references, fo)
 
 
-def generate_adaptation_data(config, alignment_file, save_dir):
+def generate_align_data(config, metadata_file, save_dir):
     os.makedirs(save_dir, exist_ok=True)
 
     stft = TacotronSTFT(
@@ -323,29 +323,25 @@ def generate_adaptation_data(config, alignment_file, save_dir):
         config["mel"]["mel_fmin"],
         config["mel"]["mel_fmax"],
     )
-    with open(alignment_file) as fi:
+
+    with open(metadata_file) as fi:
         with torch.no_grad():
             for line in fi:
                 sample = json.loads(line)
                 if not os.path.exists(sample["audio_file"]):
                     continue
-                sample["phonemes"] = " ".join(sample["phonemes"])
                 audio, _ = librosa.load(sample["audio_file"], None)
-                audio = audio[sample["start"]: sample["end"]]
-                mels, _ = get_mel_from_audio(audio, stft)
-                sample["mels"] = mels
-
+                mel, _ = get_mel_from_audio(audio, stft)
                 filename = Path(sample["audio_file"]).name
                 filename = sample["speaker"] + "_" + filename
-                save_file = os.path.join(save_dir, filename.replace('.wav', '.pkl'))
-                with open(save_file, "wb") as fo:
-                    pickle.dump(sample, fo)
+                save_file = os.path.join(save_dir, filename.replace('.wav', '.npy'))
+                np.save(save_file, mel.transpose(1, 0))
 
 
 if __name__ == "__main__":
     set_start_method("spawn")
 
-    config = yaml.load(open("data/preprocess.yaml"), Loader=yaml.FullLoader)
+    config = yaml.load(open("data/local_preprocess.yaml"), Loader=yaml.FullLoader)
     print(config)
     # parse_alignment(config)
 
@@ -357,4 +353,4 @@ if __name__ == "__main__":
 
     # dump_speaker_vectors("data/speakers", "data/speakers.json")
 
-    generate_adaptation_data(config, "data/ada_alignments.json", "data/mels")
+    generate_align_data(config, "data/alignments.json", "data/mels")

@@ -5,12 +5,11 @@ Created At: 2022-04-16
 
 from collections import OrderedDict
 import glob
-from math import floor
+import json
 import os.path
+from pathlib import Path
 import random
-import struct
 
-import lmdb
 import numpy as np
 import pickle
 import torch
@@ -19,24 +18,11 @@ from torchtext.data import batch, Dataset, Example, Field, NestedField, Iterator
 
 class TTSDataset(Dataset):
 
-    def __init__(self, data_dir, fields, speaker_vector_file=None):
+    def __init__(self, samples, data_dir, fields):
         super().__init__([], fields.values())
-        env = lmdb.open(data_dir, map_size=int(1e11))
-        self.txn = env.begin(write=False)
-        self.num_examples = self.txn.stat()["entries"]
+        self.samples = samples
+        self.data_dir = data_dir
         self.raw_fields = fields
-        if speaker_vector_file is not None:
-            self.speaker_vectors = self._load_speaker_vectors(speaker_vector_file)
-        else:
-            self.speaker_vectors = None
-
-    def _load_speaker_vectors(self, speaker_vector_file):
-        with open(speaker_vector_file, "rb") as fi:
-            speaker_vectors = pickle.load(fi)
-            for speaker, vectors in speaker_vectors.items():
-                speaker_vectors[speaker] = np.array(vectors).mean(axis=0)
-
-            return speaker_vectors
 
     @staticmethod
     def sort_key(example):
@@ -49,34 +35,59 @@ class TTSDataset(Dataset):
         return 0
 
     def __getitem__(self, i):
-        values = pickle.loads(self.txn.get(struct.pack(">I", i)))
-        if self.speaker_vectors is not None:
-            values["speakers"] = self.speaker_vectors[values["speaker"]]
-        else:
-            values["speakers"] = values["speaker"]
+        sample = self.samples[i]
+        speaker = sample["speaker"]
+        audio_file = Path(sample["audio_file"]).name
+        mel_file = f"{self.data_dir}/{speaker}_{audio_file.replace('.wav', '.npy')}"
+        mels = np.load(mel_file)
+        values = {
+            "speaker": sample["speaker"], 
+            "durations": sample["durations"],
+            "phonemes": sample["phonemes"],
+            "mels": mels
+        }
         example = Example.fromdict(values, self.raw_fields)
 
         return example
 
-    def _adjust_duration(self, values):
-        durations = values["durations"]
-        mean_duration = floor(durations.mean())
-        new_durations = [mean_duration] * len(durations)
-        for i in range(sum(durations) - sum(new_durations)):
-            new_durations[i] += 1
-        return np.array(new_durations)
-
     def __len__(self):
-        return self.num_examples
+        return len(self.samples)
 
     def __iter__(self):
-        for i in range(self.num_examples):
+        for i in range(len(self.samples)):
             yield self[i]
 
     def __getattr__(self, attr):
         if attr in self.raw_fields:
             for example in self:
                 yield getattr(example, attr)
+
+
+class AlignDataset(TTSDataset):
+
+    def __getitem__(self, i):
+        sample = self.samples[i]
+        speaker = sample["speaker"]
+        audio_file = Path(sample["audio_file"]).name
+        mel_file = f"{self.data_dir}/{speaker}_{audio_file.replace('.wav', '.npy')}"
+        mels = np.load(mel_file)
+
+        blank = "<SP>"
+        phonemes_with_blank = [blank]
+        for phoneme in sample["phonemes"]:
+            phonemes_with_blank.append(phoneme)
+            phonemes_with_blank.append(blank)
+
+        values = {
+            "mels": mels,
+            "phonemes": sample["phonemes"],
+            "phonemes_with_blank": phonemes_with_blank,
+            "mel_lens": mels.shape[0],
+            "phoneme_lens": len(sample["phonemes"])
+        }
+        example = Example.fromdict(values, self.raw_fields)
+
+        return example
 
 
 class AdaptationDataset(Dataset):
@@ -146,12 +157,9 @@ def tokenize_float(text):
     return [float(split) for split in text.split(" ")]
 
 
-def load_dataset(cache_dir, speaker_vector_file=None, use_pitch=True):
+def load_tts_dataset(metadata_file, data_dir, use_pitch=True):
     phonemes = Field(tokenize=tokenize, batch_first=True, unk_token=None)
-    if speaker_vector_file is None:
-        speakers = Field(sequential=False, unk_token=None)
-    else:
-        speakers = Field(use_vocab=False, batch_first=True, dtype=torch.float)
+    speakers = Field(sequential=False, unk_token=None)
     mel_nested = Field(use_vocab=False, batch_first=True, pad_token=0.0, dtype=torch.float)
     mels = NestedField(mel_nested, use_vocab=False)
     durations = Field(use_vocab=False, pad_token=0, batch_first=True, dtype=torch.int32)
@@ -167,14 +175,43 @@ def load_dataset(cache_dir, speaker_vector_file=None, use_pitch=True):
         pitch = Field(tokenize=tokenize_float, use_vocab=False, pad_token=0, batch_first=True, dtype=torch.float)
         fields["pitch"] = ("pitch", pitch)
 
-    train_dataset = TTSDataset(os.path.join(cache_dir, "train"), fields, speaker_vector_file)
-    eval_dataset = TTSDataset(os.path.join(cache_dir, "eval"), fields, speaker_vector_file)
+    with open(metadata_file) as fi:
+        samples = [json.loads(line) for line in fi]
+    num_eval = int(len(samples) * 0.01)
+    train_samples = samples[:-num_eval]
+    eval_samples = samples[-num_eval:]
+    train_dataset = TTSDataset(train_samples, "train", fields)
+    eval_dataset = TTSDataset(eval_samples, "eval", fields)
 
     phonemes.build_vocab(train_dataset)
+    speakers.build_vocab(train_dataset)
 
-    if speaker_vector_file is None:
-        speakers.build_vocab(train_dataset)
-    print("phonemes vocab size: ", len(phonemes.vocab))
+    return train_dataset, eval_dataset
+
+
+def load_align_dataset(metadata_file, data_dir):
+    phonemes = Field(tokenize, batch_first=True, unk_token="<SP>")
+    mel_nested = Field(use_vocab=False, batch_first=True, pad_token=0.0, dtype=torch.float)
+    mels = NestedField(mel_nested, use_vocab=False)
+    len_field = Field(sequential=False, use_vocab=False, dtype=torch.int)
+
+    fields = OrderedDict({
+        "phonemes": ("phonemes", phonemes),
+        "phonemes_with_blank": ("phonemes_with_blank", phonemes),
+        "mels": ("mels", mels),
+        "phoneme_lens": ("phoneme_lens", len_field),
+        "mel_lens": ("mel_lens", len_field)
+    })
+
+    with open(metadata_file) as fi:
+        samples = [json.loads(line) for line in fi]
+    num_eval = int(len(samples) * 0.01)
+    train_samples = samples[:-num_eval]
+    eval_samples = samples[-num_eval:]
+    train_dataset = AlignDataset(train_samples, data_dir, fields)
+    eval_dataset = AlignDataset(eval_samples, data_dir, fields)
+
+    phonemes.build_vocab(train_dataset)
 
     return train_dataset, eval_dataset
 
@@ -198,8 +235,7 @@ def load_adaptation_dataset(data_dir, checkpoint_dir):
 
 
 if __name__ == "__main__":
-    train_data, eval_data = load_adaptation_dataset("data/mels", "data/checkpoint")
-
+    train_data, eval_data = load_align_dataset("data/alignments.json", "data/mels")
     # train_data, eval_data = load_dataset("data", use_pitch=False)
     # data_iter = BucketIterator(train_data, 32, shuffle=True, sort_key="mels")
     # print(len(train_data), len(eval_data), len(train_data)+len(eval_data))
@@ -209,6 +245,9 @@ if __name__ == "__main__":
 
     data_iter = BucketIterator(eval_data, 2, train=False, sort=False)
     for b in data_iter:
-        print(b.durations)
         print(b.mels.shape)
+        print(b.phonemes)
+        print(b.phonemes_with_blank)
+        print(b.mel_lens)
+        print(b.phoneme_lens)
         break

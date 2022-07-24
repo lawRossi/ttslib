@@ -7,7 +7,6 @@ import math
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 
 def compute_pairwise_distances(p_encodings, m_encodings, p_lens, m_lens):
@@ -37,6 +36,8 @@ def compute_pairwise_distances(p_encodings, m_encodings, p_lens, m_lens):
 
 
 def compute_masks(alignments, p_len, m_len):
+    if isinstance(alignments, torch.Tensor):
+        alignments = alignments.detach().numpy()
     masks = np.ones_like(alignments)
     width = int(m_len / p_len * 1.5)
 
@@ -100,36 +101,29 @@ def get_hard_alignments(log_probs, batch_phonemes, p_lens, m_lens, blank):
     return torch.tensor(hard_alignments, dtype=torch.float)
 
 
-def get_phonemes_durations_pitch(phonemes_with_blank, hard_alignments, pitch):
-    pitch_sum = torch.bmm(pitch.unsqueeze(1), hard_alignments).squeeze(1).numpy()
+def get_phonemes_durations_pitch(phonemes_with_blank, hard_alignments):
     batch_phonemes = phonemes_with_blank.numpy()
     batch_durations = hard_alignments.sum(axis=1).numpy()
     phonemes = []
     durations = []
-    pitch = []
     max_len = 0
     for i in range(batch_phonemes.shape[0]):
         current_phonemes = []
         current_durations = []
-        current_pitch = []
-        for phoneme, duration, p_sum in zip(batch_phonemes[i], batch_durations[i], pitch_sum[i]):
+        for phoneme, duration in zip(batch_phonemes[i], batch_durations[i]):
             if duration > 0:
                 current_phonemes.append(phoneme)
                 current_durations.append(duration)
-                current_pitch.append(p_sum / duration)
         phonemes.append(current_phonemes)
         durations.append(current_durations)
-        pitch.append(current_pitch)
         max_len = max(max_len, len(current_phonemes))
     for i in range(len(phonemes)):
         phonemes[i] += [1] * (max_len - len(phonemes[i]))   # pad token of phonemes is 1
         durations[i] += [0] * (max_len - len(durations[i]))
-        pitch[i] += [0] * (max_len - len(pitch[i]))
     phonemes = torch.tensor(phonemes, dtype=torch.long)
     durations = torch.tensor(durations, dtype=torch.int)
-    pitch = torch.tensor(pitch)
 
-    return phonemes, durations, pitch
+    return phonemes, durations
 
 
 if __name__ == "__main__":
@@ -141,11 +135,11 @@ if __name__ == "__main__":
     m_lens = torch.tensor([6, 7, 8])
 
     pairwise_distances = compute_pairwise_distances(p_enc, m_enc, p_lens, m_lens)
-    
+
     log_probs = torch.log_softmax(pairwise_distances, dim=2)
-    
+
     phonemes = torch.tensor([[1, 2, 3, 0, 0], [1, 2, 0, 3, 0], [0, 1, 0, 2, 3]])
-    
+
     hard_alignments = get_hard_alignments(log_probs, phonemes, p_lens, m_lens, 0)
 
     print(hard_alignments)

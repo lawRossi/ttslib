@@ -133,7 +133,7 @@ def compute_pictch(audio, sampling_rate, hop_length, durations=None):
     # Phoneme-level average
     pos = 0
     for i, d in enumerate(durations):
-        pitch[i] = np.mean(pitch[pos : pos + d])
+        pitch[i] = np.mean(pitch[pos: pos + d])
         pos += d
     pitch = pitch[:len(durations)]
     return pitch

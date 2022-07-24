@@ -116,7 +116,7 @@ class QuantizationEmbedding(nn.Module):
 
 class SepConv(nn.Module):
 
-    def __init__(self, in_channels, out_channels, kernel_size, padding):
+    def __init__(self, in_channels, out_channels, kernel_size, padding, ):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, in_channels, (1, kernel_size), padding=(0, padding), groups=in_channels)
         self.conv2 = nn.Conv2d(in_channels, out_channels, (1, 1))
@@ -195,8 +195,8 @@ class ConvBlock(nn.Module):
 class GLUBlock(nn.Module):
     def __init__(self, input_dims, output_dims, kernel_size, dropout=0.1):
         super().__init__()
-        self.conv1 = SepConv(input_dims, output_dims, kernel_size, (kernel_size-1)//2)
-        self.conv2 = SepConv(input_dims, output_dims, kernel_size, (kernel_size-1)//2)
+        self.conv1 = SepConv(input_dims, output_dims, kernel_size, padding=(kernel_size-1)//2)
+        self.conv2 = SepConv(input_dims, output_dims, kernel_size, padding=(kernel_size-1)//2)
         self.layer_norm = nn.LayerNorm(output_dims)
         self.dropout = nn.Dropout(dropout)
 
@@ -204,7 +204,8 @@ class GLUBlock(nn.Module):
         residual = x
         v = self.conv1(self.dropout(x))
         u = torch.sigmoid(self.conv2(self.dropout(x)))
-        normed = self.layer_norm(residual * (1 - u) + v * u)
+        hidden = residual * (1 - u) + v * u
+        normed = self.layer_norm(hidden)
         output = normed.masked_fill(padding_mask.unsqueeze(-1), 0)
         return output
 
@@ -238,12 +239,12 @@ class Encoder(nn.Module):
         if model_type == "FFT":
             self.pos_embedding = PositionalEmbedding(embed_dims, max_seq_len)
             self.encoding_blocks = nn.ModuleList(
-                [FFTBlock(embed_dims, num_heads, hidden_dims, kernel_sizes, dropout) 
+                [FFTBlock(embed_dims, num_heads, hidden_dims, kernel_sizes, dropout)
                  for _ in range(layers)]
             )
         elif model_type == "CNN":
             self.encoding_blocks = nn.ModuleList(
-                [ConvBlock(embed_dims, embed_dims, kernel_sizes[i], dropout) 
+                [ConvBlock(embed_dims, embed_dims, kernel_sizes[i], dropout)
                  for i in range(layers)]
             )
         elif model_type == "GLU":
@@ -281,7 +282,7 @@ class Decoder(nn.Module):
             )
         elif model_type == "GLU":
             self.decoding_blocks = nn.ModuleList(
-            [GLUBlock(embed_dims, embed_dims, kernel_sizes[i], dropout) for i in range(layers)]
+                [GLUBlock(embed_dims, embed_dims, kernel_sizes[i], dropout, i+1) for i in range(layers)]
             )
         self.model_type = model_type
         self.linear = nn.Linear(embed_dims, output_dims)

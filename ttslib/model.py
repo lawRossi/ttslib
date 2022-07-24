@@ -279,7 +279,6 @@ class UnetSpeech(FastSpeech):
             mel_preds = self.decoder(outputs["encodings"], means, stds, mel_padding_mask)
         else:
             mel_preds = self.decoder(mel_encodings, means, stds, mel_padding_mask)
-
         return mel_preds
 
 
