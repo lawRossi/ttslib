@@ -1,0 +1,12 @@
+model: "ttslib.aligning.model.AligningModel"
+
+vocab_size: 220
+
+embed_dims: 256
+
+mel_dims: 80
+
+dropout: 0.3
+
+mel_encoder:
+  kernel_sizes: [5, 5, 5]

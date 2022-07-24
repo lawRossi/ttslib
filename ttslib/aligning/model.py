@@ -46,8 +46,14 @@ class PhonemeEncoder(nn.Module):
 
 class AligningModel(nn.Module):
 
-    def __init__(self, vocab_size, mel_dims, embed_dims, kernel_sizes, dropout=0.3):
+    def __init__(self, model_config):
         super().__init__()
+        vocab_size = model_config["vocab_size"]
+        mel_dims = model_config["mel_dims"]
+        embed_dims = model_config["embed_dims"]
+        kernel_sizes = model_config["mel_encoder"]["kernel_sizes"]
+        dropout = model_config["dropout"]
+
         self.phoneme_encoder = PhonemeEncoder(vocab_size, embed_dims)
         self.mel_encoder = MelEncoder(mel_dims, embed_dims, kernel_sizes)
         self.lstm = nn.LSTM(2*embed_dims, embed_dims, batch_first=True)

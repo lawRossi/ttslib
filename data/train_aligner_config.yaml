@@ -1,0 +1,29 @@
+device: "cpu"
+
+batch_size: 32
+
+train_steps: 60000
+
+save_steps: 5
+
+log_steps: 5
+
+data_dir: "data/mels"
+
+metadata_file: "data/metadata.json"
+
+output_dir: "output"
+
+restore_path: null
+
+frozen_layers: []
+
+optimizer:
+  betas: [0.9, 0.98]
+  eps: 0.000000001
+  weight_decay: 0.0
+  grad_clip_thresh: 1.0
+  warm_up_step: 6000
+  lr: 0.0001
+
+model_config_file: "data/aligner_model_config.yaml"

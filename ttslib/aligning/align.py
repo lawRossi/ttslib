@@ -7,24 +7,10 @@ import math
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
-
-def compute_pairwise_distances(p_encodings, m_encodings, p_lens, m_lens):
-    pairwise_distances = -torch.cdist(m_encodings, p_encodings, p=2)
-    device = p_encodings.device
-    p_mask = torch.arange(p_encodings.shape[1]) >= p_lens.unsqueeze(-1).to(device)
-    m_mask = torch.arange(m_encodings.shape[1]) >= m_lens.unsqueeze(-1).to(device)
-
-    pairwise_distances = pairwise_distances.masked_fill(m_mask.unsqueeze(-1), -1e9)
-    pairwise_distances = pairwise_distances.masked_fill(p_mask.unsqueeze(1), -1e9)
-
-    return pairwise_distances
-
-
-# def compute_pairwise_distances(p_encodings, m_encodings, p_lens, m_lens, T=0.05):
-#     p_encodings = F.normalize(p_encodings, p=2, dim=2)
-#     m_encodings = F.normalize(m_encodings, p=2, dim=2)
-#     pairwise_distances = torch.bmm(m_encodings, p_encodings.permute(0, 2, 1)) / T
+# def compute_pairwise_distances(p_encodings, m_encodings, p_lens, m_lens):
+#     pairwise_distances = -torch.cdist(m_encodings, p_encodings, p=2)
 #     device = p_encodings.device
 #     p_mask = torch.arange(p_encodings.shape[1]) >= p_lens.unsqueeze(-1).to(device)
 #     m_mask = torch.arange(m_encodings.shape[1]) >= m_lens.unsqueeze(-1).to(device)
@@ -33,6 +19,20 @@ def compute_pairwise_distances(p_encodings, m_encodings, p_lens, m_lens):
 #     pairwise_distances = pairwise_distances.masked_fill(p_mask.unsqueeze(1), -1e9)
 
 #     return pairwise_distances
+
+
+def compute_pairwise_distances(p_encodings, m_encodings, p_lens, m_lens, T=0.05):
+    p_encodings = F.normalize(p_encodings, p=2, dim=2)
+    m_encodings = F.normalize(m_encodings, p=2, dim=2)
+    pairwise_distances = torch.bmm(m_encodings, p_encodings.permute(0, 2, 1)) / T
+    device = p_encodings.device
+    p_mask = torch.arange(p_encodings.shape[1]) >= p_lens.unsqueeze(-1).to(device)
+    m_mask = torch.arange(m_encodings.shape[1]) >= m_lens.unsqueeze(-1).to(device)
+
+    pairwise_distances = pairwise_distances.masked_fill(m_mask.unsqueeze(-1), -1e9)
+    pairwise_distances = pairwise_distances.masked_fill(p_mask.unsqueeze(1), -1e9)
+
+    return pairwise_distances
 
 
 def compute_masks(alignments, p_len, m_len):

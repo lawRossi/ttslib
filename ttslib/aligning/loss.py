@@ -3,6 +3,9 @@
 Created At: 2022-07-24
 """
 
+import math
+
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -26,12 +29,9 @@ class AligningLoss(nn.Module):
         ctc_loss = self.ctc(log_probs, phonemes, input_lens, phoneme_lens)
 
         alignments = inputs["alignments"].transpose(1, 2)
-        alignment_loss = 0
 
-        for i in range(alignments.shape[0]):
-            masks = compute_masks(alignments[i], input_lens[i], mel_lens[i])
-            masks = torch.tensor(1-masks, dtype=torch.int)
-            alignment_loss -= (alignments[i] * masks).sum()
+        masks = self._compute_alignment_masks(alignments, input_lens, mel_lens)
+        alignment_loss = -(alignments * masks).sum() / alignments.shape[0]
 
         losses = {
             "total_loss": ctc_loss + alignment_loss,
@@ -40,6 +40,20 @@ class AligningLoss(nn.Module):
         }
 
         return losses
+
+    def _compute_alignment_masks(self, alignments, p_lens, m_lens):
+        masks = np.zeros(alignments.shape)
+
+        for idx in range(masks.shape[0]):
+            mean_len = m_lens[idx] / p_lens[idx]
+            width = int(mean_len * 1.5)
+            for i in range(p_lens[idx]):
+                start = max(0, math.floor(i * mean_len - width))
+                end = min(m_lens[idx], math.ceil(i * mean_len + width))
+                for j in range(start, end):
+                    masks[idx][i][j] = 1
+
+        return torch.tensor(masks, dtype=torch.int)
 
 
 class OldAligningLoss(nn.Module):

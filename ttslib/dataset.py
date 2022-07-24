@@ -235,7 +235,7 @@ def load_adaptation_dataset(data_dir, checkpoint_dir):
 
 
 if __name__ == "__main__":
-    train_data, eval_data = load_align_dataset("data/alignments.json", "data/mels")
+    train_data, eval_data = load_align_dataset("data/metadata.json", "data/mels")
     # train_data, eval_data = load_dataset("data", use_pitch=False)
     # data_iter = BucketIterator(train_data, 32, shuffle=True, sort_key="mels")
     # print(len(train_data), len(eval_data), len(train_data)+len(eval_data))

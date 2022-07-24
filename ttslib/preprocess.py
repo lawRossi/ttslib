@@ -45,43 +45,65 @@ class Worker(Process):
         build_cache(self.samples, self.stft, self.config)
 
 
+# def parse_alignment(config):
+#     metadata_file = os.path.join(config["data_dir"], "metadata.txt")
+#     corpus_dir = config["aligned_corpus_dir"]
+#     sampling_rate = config["audio"]["sampling_rate"]
+#     hop_length = config["stft"]["hop_length"]
+#     max_text_len = config["max_text_len"]
+#     alignment_file = config["alignment_file"]
+
+#     num_invalid = 0
+#     with open(metadata_file, encoding="utf-8") as fi, \
+#             open(alignment_file, "w", encoding="utf-8") as fo:
+#         base_dir = os.path.dirname(os.path.abspath(metadata_file))
+#         for line in fi:
+#             audio_file, _, speaker = line.strip().split("\t")
+#             textgrid_file = os.path.join(corpus_dir, "/".join(Path(audio_file).parts[1:]).replace(".wav", ".TextGrid"))
+#             audio_file = os.path.join(base_dir, audio_file)
+#             if not os.path.exists(audio_file) or not os.path.exists(textgrid_file):
+#                 continue
+#             phonemes, durations, start, end = get_alignment(textgrid_file, sampling_rate, hop_length)
+#             if len(phonemes) > max_text_len:
+#                 logger.info(f"transcript too long : {textgrid_file}")
+#                 num_invalid += 1
+#                 continue
+#             if 0 in durations:
+#                 logger.info(f"invalid duration: {textgrid_file}")
+#                 num_invalid += 1
+#                 continue
+
+#             fo.write(json.dumps({
+#                 "audio_file": audio_file,
+#                 "speaker": speaker,
+#                 "phonemes": phonemes,
+#                 "durations": durations,
+#                 "start": start,
+#                 "end": end
+#             }) + "\n")
+#         logger.info(f"{num_invalid} invalid files")
+
+
 def parse_alignment(config):
     metadata_file = os.path.join(config["data_dir"], "metadata.txt")
-    corpus_dir = config["aligned_corpus_dir"]
-    sampling_rate = config["audio"]["sampling_rate"]
-    hop_length = config["stft"]["hop_length"]
-    max_text_len = config["max_text_len"]
-    alignment_file = config["alignment_file"]
 
-    num_invalid = 0
     with open(metadata_file, encoding="utf-8") as fi, \
-            open(alignment_file, "w", encoding="utf-8") as fo:
+            open("data/metadata.json", "w", encoding="utf-8") as fo:
         base_dir = os.path.dirname(os.path.abspath(metadata_file))
+        lines = []
         for line in fi:
-            audio_file, _, speaker = line.strip().split("\t")
-            textgrid_file = os.path.join(corpus_dir, "/".join(Path(audio_file).parts[1:]).replace(".wav", ".TextGrid"))
+            audio_file, phonemes, speaker = line.strip().split("\t")
             audio_file = os.path.join(base_dir, audio_file)
-            if not os.path.exists(audio_file) or not os.path.exists(textgrid_file):
+            if not os.path.exists(audio_file):
                 continue
-            phonemes, durations, start, end = get_alignment(textgrid_file, sampling_rate, hop_length)
-            if len(phonemes) > max_text_len:
-                logger.info(f"transcript too long : {textgrid_file}")
-                num_invalid += 1
-                continue
-            if 0 in durations:
-                logger.info(f"invalid duration: {textgrid_file}")
-                num_invalid += 1
-                continue
-
-            fo.write(json.dumps({
+            lines.append(json.dumps({
                 "audio_file": audio_file,
                 "speaker": speaker,
-                "phonemes": phonemes,
-                "durations": durations,
-                "start": start,
-                "end": end
-            }) + "\n")
-        logger.info(f"{num_invalid} invalid files")
+                "phonemes": phonemes.strip().split(" ")
+            }))
+
+        random.shuffle(lines)
+        fo.write("\n".join(lines))
 
 
 def get_alignment(textgrid_file, sampling_rate, hop_length):
@@ -341,7 +363,7 @@ def generate_align_data(config, metadata_file, save_dir):
 if __name__ == "__main__":
     set_start_method("spawn")
 
-    config = yaml.load(open("data/local_preprocess.yaml"), Loader=yaml.FullLoader)
+    config = yaml.load(open("data/preprocess.yaml"), Loader=yaml.FullLoader)
     print(config)
     # parse_alignment(config)
 
@@ -353,4 +375,4 @@ if __name__ == "__main__":
 
     # dump_speaker_vectors("data/speakers", "data/speakers.json")
 
-    generate_align_data(config, "data/alignments.json", "data/mels")
+    generate_align_data(config, "data/metadata.json", "data/mels")
