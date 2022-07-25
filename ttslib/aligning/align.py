@@ -101,7 +101,7 @@ def get_hard_alignments(log_probs, batch_phonemes, p_lens, m_lens, blank):
     return torch.tensor(hard_alignments, dtype=torch.float)
 
 
-def get_phonemes_durations_pitch(phonemes_with_blank, hard_alignments):
+def get_phonemes_durations(phonemes_with_blank, hard_alignments):
     batch_phonemes = phonemes_with_blank.numpy()
     batch_durations = hard_alignments.sum(axis=1).numpy()
     phonemes = []
@@ -144,7 +144,7 @@ if __name__ == "__main__":
 
     print(hard_alignments)
 
-    phonemes, durations, pitch = get_phonemes_durations_pitch(phonemes, hard_alignments, pitch)
+    phonemes, durations, pitch = get_phonemes_durations(phonemes, hard_alignments, pitch)
 
     print(phonemes)
     print(durations)

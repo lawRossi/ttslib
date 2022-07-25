@@ -86,6 +86,20 @@ class AligningModel(nn.Module):
 
         return losses
 
+    def inference(self, mels, phonemes_with_blank, mel_lens, phoneme_lens):
+        mel_padding_mask = torch.arange(mels.shape[1]) >= mel_lens.unsqueeze(-1)
+        mel_encodings = self.mel_encoder(mels, mel_padding_mask)
+
+        phoneme_encodings = self.phoneme_encoder(phonemes_with_blank)
+
+        distances = compute_pairwise_distances(phoneme_encodings, mel_encodings, phoneme_lens, mel_lens)
+        log_probs = torch.log_softmax(distances, dim=2)
+
+        alignments = get_hard_alignments(log_probs, phonemes_with_blank, phoneme_lens, mel_lens, 0)
+        durations = alignments.sum(dim=1)
+
+        return durations
+
 
 if __name__ == "__main__":
     mels = torch.rand((2, 30, 80))
@@ -96,15 +110,27 @@ if __name__ == "__main__":
     ], dtype=torch.long)
 
     phonemes_with_blank = torch.tensor([
-        [0, 2, 0, 4, 0, 0, 1],
+        [0, 2, 0, 4, 0, 1, 1],
         [0, 2, 0, 3, 0, 4, 0]
     ], dtype=torch.long)
 
     mel_lens = torch.tensor([28, 29])
-    phoneme_lens = torch.tensor([2, 3])
+    phoneme_lens = torch.tensor([5, 7])
 
-    model = AligningModel(30, 80, 10, [3, 3])
+    model_config = {
+        "vocab_size": 30,
+        "mel_dims": 80,
+        "embed_dims": 10,
+        "dropout": 0.3,
+        "mel_encoder": {
+            "kernel_sizes": [3, 3]
+        }
+    }
+
+    model = AligningModel(model_config)
 
     losses = model.forward(mels, phonemes_with_blank, phonemes, mel_lens, phoneme_lens)
 
     print(losses)
+
+    print(model.inference(mels, phonemes_with_blank, mel_lens, phoneme_lens))

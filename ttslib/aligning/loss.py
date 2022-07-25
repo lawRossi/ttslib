@@ -25,12 +25,12 @@ class AligningLoss(nn.Module):
         phoneme_lens = inputs["phoneme_lens"]
         mel_lens = inputs["mel_lens"]
 
-        input_lens = 2 * phoneme_lens + 1
-        ctc_loss = self.ctc(log_probs, phonemes, input_lens, phoneme_lens)
+        target_lens = (phoneme_lens - 1) // 2
+        ctc_loss = self.ctc(log_probs, phonemes, phoneme_lens, target_lens)
 
         alignments = inputs["alignments"].transpose(1, 2)
 
-        masks = self._compute_alignment_masks(alignments, input_lens, mel_lens)
+        masks = self._compute_alignment_masks(alignments, phoneme_lens, mel_lens)
         alignment_loss = -(alignments * masks).sum() / alignments.shape[0]
 
         losses = {
