@@ -98,7 +98,7 @@ class AligningModel(nn.Module):
         alignments = get_hard_alignments(log_probs, phonemes_with_blank, phoneme_lens, mel_lens, 0)
         durations = alignments.sum(dim=1)
 
-        return durations
+        return durations.numpy().astype(int)
 
 
 if __name__ == "__main__":

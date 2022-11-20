@@ -126,11 +126,10 @@ class Synthesizer:
                 wav = self.vocoder.inverse(mels.transpose(1, 0).unsqueeze(0) / np.log(10))[0]
             elif self.vocoder_model == "hifigan":
                 wav = self.vocoder(mels.transpose(1, 0).unsqueeze(0)).squeeze(1)[0]
-            elif self.vocoder_model == "mbmelgan":
-                wav = self.vocoder.mel2wave(mels.transpose(1, 0).unsqueeze(0))
             wav = wav.cpu().detach().numpy()
             # wav = (wav * self.max_wav_value).astype("int16")
             # wav = wav / self.max_wav_value
+            # wav = wav / max(abs(wav))
             wavs.append(wav)
 
         sil = pydub.AudioSegment.silent(300, frame_rate=self.sampling_rate)
@@ -151,20 +150,20 @@ class Synthesizer:
 
 
 if __name__ == "__main__":
-    # synthesizer = Synthesizer("data/ada_hifi")
-    synthesizer = Synthesizer("data/unet_hifi", "data/references.pkl")
+    # synthesizer = Synthesizer("data/ada_checkpoint")
+    synthesizer = Synthesizer("data/checkpoint", "data/references.pkl")
 
-    texts = ["通过设置用户偏好", "我很想你呢，你在干什么？有没有想我？", "今天天气很好你打算做什么？我们一起出去玩吧",
+    texts = ["通过设置用户偏好", "广州女大学生登山失联", "我很想你呢，你在干什么？有没有想我？", "今天天气很好你打算做什么？我们一起出去玩吧",
              "你我相识本是一场误会让我们从此别再见", "扶老奶奶过马路是我们都应该做的", "图啥自强自立，不过三十而已",
              "我们的价值观不一样，不能成为好朋友"]
 
-    # for speaker in ["lijian", "meizi1", "SSB0080", "chenyixun"]:
+    # for speaker in ["SSB0080", "SSB0005"]:
     #     for i, text in enumerate(texts):
     #         synthesizer.synthesize(text, f"demo/demo_{speaker}{i}.wav", speaker)
-            # mels = synthesizer.generate_mels(text, speaker)
-            # np.save(f"mels/{speaker}{i}.npy", mels[0].transpose(1, 0).numpy())
+            #  mels = synthesizer.generate_mels(text, speaker)
+            #  np.save(f"mels/{speaker}{i}.npy", mels[0].transpose(1, 0).numpy())
 
     references = [("SSB0080", "SSB00800001.wav"), ("chenyixun", "cyxsegment52.wav"), ("meizi1", "segment112.wav"), ("meizi2", "segment7.wav"), ("SSB0005", "SSB00050001.wav")]
     for speaker, reference_key in references:
         for i, text in enumerate(texts):
-            synthesizer.synthesize(text, f"demo/unet_demo_{speaker}{i}.wav", speaker, reference_key)
+            synthesizer.synthesize(text, f"demo1/unet_demo_{speaker}{i}.wav", speaker, reference_key)

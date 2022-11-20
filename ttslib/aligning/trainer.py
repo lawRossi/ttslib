@@ -4,9 +4,7 @@ Created At: 2022-07-24
 """
 
 from collections import defaultdict
-import glob
 import os
-import re
 
 from loguru import logger
 import pickle
@@ -16,10 +14,8 @@ from torch.utils.tensorboard import SummaryWriter
 import tqdm
 import yaml
 
-from ttslib.audio_processing import TacotronSTFT, inv_mel_spec
 from ttslib.dataset import load_align_dataset, BucketIterator
-from ttslib.optimizer import ScheduledOptimizer
-from ttslib.utils import plot_spectrogram, find_class
+from ttslib.utils import find_class
 
 
 class Trainer:
@@ -32,6 +28,7 @@ class Trainer:
         self.device = train_config["device"]
         self.train_logger = SummaryWriter(self.output_dir)
         self.train_config = train_config
+        self.best_loss = 10000
 
     def train(self):
         model = self._prepare_model()
@@ -41,7 +38,7 @@ class Trainer:
                                          sort_key="mels", device=self.device)
         step = 0
         losses = defaultdict(float)
-        for epoch in range(10000):
+        for epoch in range(25):
             logger.info(f"epoch {epoch}")
             model.train()
             for batch in tqdm.tqdm(train_data_iter, "train interations"):
@@ -55,15 +52,18 @@ class Trainer:
                 for key, loss in model_outputs.items():
                     losses[key] += loss.item()
                 if step % self.log_steps == 0:
-                    self._log_step(optimizer, losses, step)
+                    self._log_step(losses, step)
                     losses.clear()
                 if step % self.save_steps == 0:
-                    self._save_checkpoint(model, optimizer)
-                    break
+                    checkpoint_path = os.path.join(self.output_dir, "checkpoint")
+                    self._save_checkpoint(model, optimizer, checkpoint_path)
                 if step == self.train_steps:
                     break
-
-            self._evaluate(model, eval_dataset, step)
+            loss = self._evaluate(model, eval_dataset, step)
+            if loss < self.best_loss:
+                checkpoint_path = os.path.join(self.output_dir, "best_checkpoint")
+                self._save_checkpoint(model, optimizer, checkpoint_path)
+                self.best_loss = loss
             if step == self.train_steps:
                 logger.info("training finished")
                 break
@@ -75,17 +75,22 @@ class Trainer:
         with torch.no_grad():
             ctc_loss = 0
             alignment_loss = 0
+            total_loss = 0
             n = 0
             for batch in tqdm.tqdm(eval_data_iter, "eval interations"):
                 batch_inputs = {field: getattr(batch, field) for field in batch.fields}
                 losses = model(**batch_inputs)
                 ctc_loss += losses["ctc_loss"].item()
                 alignment_loss += losses["alignment_loss"].item()
+                total_loss += losses["total_loss"].item()
                 n += 1
             ctc_loss /= n
             alignment_loss /= n
+            total_loss /= n
             self.train_logger.add_scalar("eval/ctc_loss", ctc_loss, step)
             self.train_logger.add_scalar("eval/alignment_loss", alignment_loss, step)
+
+        return total_loss
 
     def _prepare_model(self):
         model_config_file = self.train_config["model_config_file"]
@@ -127,19 +132,19 @@ class Trainer:
 
         return train_dataset, eval_dataset
 
-    def _log_step(self, optimizer, losses, step):
+    def _log_step(self, losses, step):
         for loss_name, loss in losses.items():
             loss /= self.log_steps
             self.train_logger.add_scalar(loss_name, loss, step)
 
-    def _save_checkpoint(self, model, optimizer):
+    def _save_checkpoint(self, model, optimizer, checkpoint_path):
         os.makedirs(self.output_dir, exist_ok=True)
         torch.save(
             {
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict()
              },
-            os.path.join(self.output_dir, "checkpoint")
+            checkpoint_path
         )
 
 

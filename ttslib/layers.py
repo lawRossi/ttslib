@@ -11,30 +11,6 @@ from torch.autograd import Variable
 import torch.nn as nn
 
 
-class AdaptiveLayerNorm(nn.Module):
-
-    def __init__(self, encoding_dims, num_features) -> None:
-        super().__init__()
-        self.W_gamma = nn.Linear(encoding_dims, num_features)
-        self.W_beta = nn.Linear(encoding_dims, num_features)
-        self.layer_norm = nn.LayerNorm(num_features)
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        torch.nn.init.constant_(self.W_gamma.weight, 0.0)
-        torch.nn.init.constant_(self.W_gamma.bias, 1.0)
-        torch.nn.init.constant_(self.W_beta.weight, 0.0)
-        torch.nn.init.constant_(self.W_beta.bias, 0.0)
-
-    def forward(self, speaker_encodings, values):
-        gamma = self.W_gamma(speaker_encodings)
-        beta = self.W_beta(speaker_encodings)
-        normed = self.layer_norm(values)
-        scaled_normed = normed * gamma.unsqueeze(1) + beta.unsqueeze(1)
-
-        return scaled_normed
-
-
 class InstanceNorm(nn.Module):
 
     def __init__(self, eps=1e-8):
@@ -56,6 +32,30 @@ class InstanceNorm(nn.Module):
 
 
 class AdaptiveInstanceNorm(nn.Module):
+
+    def __init__(self, encoding_dims, num_features) -> None:
+        super().__init__()
+        self.W_gamma = nn.Linear(encoding_dims, num_features)
+        self.W_beta = nn.Linear(encoding_dims, num_features)
+        self.instance_norm = InstanceNorm()
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        torch.nn.init.constant_(self.W_gamma.weight, 0.0)
+        torch.nn.init.constant_(self.W_gamma.bias, 1.0)
+        torch.nn.init.constant_(self.W_beta.weight, 0.0)
+        torch.nn.init.constant_(self.W_beta.bias, 0.0)
+
+    def forward(self, speaker_encodings, values, padding_mask):
+        gamma = self.W_gamma(speaker_encodings)
+        beta = self.W_beta(speaker_encodings)
+        normed, _, _ = self.instance_norm(values, padding_mask)
+        scaled_normed = normed * gamma.unsqueeze(1) + beta.unsqueeze(1)
+
+        return scaled_normed
+
+
+class ConditionalInstanceNorm(nn.Module):
 
     def __init__(self):
         super().__init__()
@@ -124,7 +124,7 @@ class SepConv(nn.Module):
     def forward(self, x):
         x = x.transpose(1, 2).unsqueeze(2)
         conved = self.conv2(self.conv1(x))
-        return conved.squeeze(2).transpose(1, 2).contiguous()
+        return conved.squeeze(2).transpose(1, 2)
 
 
 class PositionwiseFeedForward(nn.Module):
@@ -179,7 +179,7 @@ class FFTBlock(nn.Module):
 class ConvBlock(nn.Module):
     def __init__(self, input_dims, output_dims, kernel_size, dropout=0.1):
         super().__init__()
-        self.conv = SepConv(input_dims, output_dims, kernel_size, (kernel_size-1)//2)
+        self.conv = SepConv(input_dims, output_dims, kernel_size, kernel_size//2)
         self.layer_norm = nn.LayerNorm(output_dims)
         self.dropout = nn.Dropout(dropout)
 
@@ -195,8 +195,8 @@ class ConvBlock(nn.Module):
 class GLUBlock(nn.Module):
     def __init__(self, input_dims, output_dims, kernel_size, dropout=0.1):
         super().__init__()
-        self.conv1 = SepConv(input_dims, output_dims, kernel_size, padding=(kernel_size-1)//2)
-        self.conv2 = SepConv(input_dims, output_dims, kernel_size, padding=(kernel_size-1)//2)
+        self.conv1 = SepConv(input_dims, output_dims, kernel_size, padding=kernel_size//2)
+        self.conv2 = SepConv(input_dims, output_dims, kernel_size, padding=kernel_size//2)
         self.layer_norm = nn.LayerNorm(output_dims)
         self.dropout = nn.Dropout(dropout)
 
@@ -215,9 +215,9 @@ class ResCnn(nn.Module):
         super().__init__()
         self.conv_block = nn.Sequential(
             nn.Dropout(dropout),
-            nn.Conv1d(input_dims, output_dims, kernel_size, padding=(kernel_size-1)//2),
+            nn.Conv1d(input_dims, output_dims, kernel_size, padding=kernel_size//2),
             nn.ReLU(),
-            nn.Conv1d(output_dims, output_dims, kernel_size, padding=(kernel_size-1)//2)
+            nn.Conv1d(output_dims, output_dims, kernel_size, padding=kernel_size//2)
         )
 
     def forward(self, x, padding_mask):
@@ -233,9 +233,10 @@ class ResCnn(nn.Module):
 class Encoder(nn.Module):
 
     def __init__(self, vocab_size, embed_dims, kernel_sizes, num_heads=None, hidden_dims=None,
-                 layers=4, max_seq_len=300, dropout=0.1, padding_idx=0, model_type="FFT"):
+                 max_seq_len=300, dropout=0.1, padding_idx=0, model_type="FFT"):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dims, padding_idx=padding_idx)
+        layers = len(kernel_sizes)
         if model_type == "FFT":
             self.pos_embedding = PositionalEmbedding(embed_dims, max_seq_len)
             self.encoding_blocks = nn.ModuleList(
@@ -269,8 +270,9 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
 
     def __init__(self, embed_dims, kernel_sizes, output_dims, num_heads=None, hidden_dims=None,
-                 layers=4, max_seq_len=1000, dropout=0.1, model_type="FFT"):
+                 max_seq_len=1000, dropout=0.1, model_type="FFT"):
         super().__init__()
+        layers = len(kernel_sizes)
         if model_type == "FFT":
             self.pos_embedding = PositionalEmbedding(embed_dims, max_seq_len)
             self.decoding_blocks = nn.ModuleList(
@@ -312,10 +314,10 @@ class AdaptiveDecoderLayer(nn.Module):
     def __init__(self, embed_dims, kernel_size, dropout=0.1):
         super().__init__()
         self.conv = ResCnn(embed_dims, embed_dims, kernel_size, dropout)
-        self.norm_layer = AdaptiveLayerNorm(embed_dims, embed_dims)
+        self.norm_layer = AdaptiveInstanceNorm(embed_dims, embed_dims)
 
     def forward(self, inputs, padding_mask, speaker_encodings=None):
-        normed = self.norm_layer(speaker_encodings, inputs)
+        normed = self.norm_layer(speaker_encodings, inputs, padding_mask)
         conved = self.conv(normed, padding_mask)
         output = conved.masked_fill(padding_mask.unsqueeze(-1), 0)
 
@@ -324,12 +326,12 @@ class AdaptiveDecoderLayer(nn.Module):
 
 class AdaptiveDocoder(nn.Module):
 
-    def __init__(self, embed_dims, kernel_sizes, layers, output_dims, dropout=0.1):
+    def __init__(self, embed_dims, kernel_sizes, output_dims, dropout=0.1):
         super().__init__()
 
         self.layers = nn.ModuleList([
             AdaptiveDecoderLayer(embed_dims, kernel_sizes[i], dropout)
-            for i in range(layers)
+            for i in range(len(kernel_sizes))
         ])
 
         self.linear = nn.Linear(embed_dims, output_dims)
@@ -356,12 +358,12 @@ class UnetEncoderLayer(nn.Module):
 
 
 class UnetEncoder(nn.Module):
-    def __init__(self, mel_dims, embed_dims, kernel_sizes, layers, dropout=0.1):
+    def __init__(self, mel_dims, embed_dims, kernel_sizes, dropout=0.1):
         super().__init__()
         self.projection = nn.Linear(mel_dims, embed_dims)
         self.encoder_layers = nn.ModuleList([
             UnetEncoderLayer(embed_dims, embed_dims, kernel_sizes[i], dropout)
-            for i in range(layers)
+            for i in range(len(kernel_sizes))
         ])
 
     def forward(self, inputs, padding_mask):
@@ -380,7 +382,7 @@ class UnetDecoderLayer(nn.Module):
     def __init__(self, emb_dims, kernel_size, dropout=0.1):
         super().__init__()
         self.conv = ResCnn(emb_dims, emb_dims, kernel_size, dropout)
-        self.norm_layer = AdaptiveInstanceNorm()
+        self.norm_layer = ConditionalInstanceNorm()
 
     def forward(self, inputs, mean, std, padding_mask):
         conved = self.conv(inputs, padding_mask)
@@ -391,12 +393,12 @@ class UnetDecoderLayer(nn.Module):
 
 class UnetDocoder(nn.Module):
 
-    def __init__(self, embed_dims, kernel_sizes, layers, output_dims, dropout=0.1):
+    def __init__(self, embed_dims, kernel_sizes, output_dims, dropout=0.1):
         super().__init__()
 
         self.layers = nn.ModuleList([
             UnetDecoderLayer(embed_dims, kernel_sizes[i], dropout)
-            for i in range(layers)
+            for i in range(len(kernel_sizes))
         ])
 
         self.linear = nn.Linear(embed_dims, output_dims)
@@ -423,12 +425,12 @@ class VariancePredictor(nn.Module):
     def __init__(self, input_size, filter_size, kernel_size, dropout=0.5, stop_gradient=False):
         super().__init__()
         self.conv_block = nn.Sequential(
-            SepConv(input_size, filter_size, kernel_size, padding=(kernel_size-1)//2),
+            SepConv(input_size, filter_size, kernel_size, padding=kernel_size//2),
             nn.ReLU(),
             nn.LayerNorm(filter_size),
             nn.Dropout(dropout),
 
-            SepConv(filter_size, filter_size, kernel_size, padding=(kernel_size-1)//2),
+            SepConv(filter_size, filter_size, kernel_size, padding=kernel_size//2),
             nn.ReLU(),
             nn.LayerNorm(filter_size),
             nn.Dropout(dropout),
@@ -585,39 +587,6 @@ class VarianceAdaptor(nn.Module):
         )
         duration_rounded = duration_rounded.masked_fill(padding_mask, 0)
         return duration_rounded
-
-
-class FCSpeakerEncoder(nn.Module):
-    def __init__(self, emb_dims, vector_dims, layers=1):
-        super().__init__()
-        self.layers = layers
-        if layers == 1:
-            self.projection = nn.Linear(vector_dims, emb_dims)
-        else:
-            self.projection = nn.Linear(vector_dims, emb_dims//2)
-            self.output = nn.Linear(emb_dims//2, emb_dims)
-
-    def forward(self, speaker_vectors):
-        if self.layers == 1:
-            return self.projection(speaker_vectors)
-        else:
-            hidden = self.projection(speaker_vectors)
-            return self.output(torch.relu(hidden))
-
-
-class ConvSpeakerEncoder(nn.Module):
-    def __init__(self, emb_dims, vector_dims, kernel_sizes):
-        super().__init__()
-        self.conv1 = nn.Conv1d(1, emb_dims//2, kernel_sizes[0])
-        self.conv2 = nn.Conv1d(1, emb_dims//2, kernel_sizes[1])
-        self.pooling1 = nn.MaxPool1d(vector_dims-kernel_sizes[0]+1)
-        self.pooling2 = nn.MaxPool1d(vector_dims-kernel_sizes[1]+1)
-
-    def forward(self, speaker_vectors):
-        speaker_vectors = speaker_vectors.unsqueeze(1)
-        part1 = self.pooling1(self.conv1(speaker_vectors)).squeeze(-1)
-        part2 = self.pooling2(self.conv2(speaker_vectors)).squeeze(-1)
-        return torch.cat([part1, part2], dim=1)
 
 
 if __name__ == "__main__":

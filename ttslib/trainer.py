@@ -16,7 +16,7 @@ import tqdm
 import yaml
 
 from ttslib.audio_processing import TacotronSTFT, inv_mel_spec
-from ttslib.dataset import load_adaptation_dataset, load_dataset, BucketIterator
+from ttslib.dataset import load_adaptation_dataset, load_tts_dataset, BucketIterator
 from ttslib.optimizer import ScheduledOptimizer
 from ttslib.utils import plot_spectrogram, find_class
 
@@ -141,14 +141,10 @@ class Trainer:
         return optimizer
 
     def _load_datasets(self):
-        if self.model_config["use_existing_speaker_vectors"]:
-            speaker_vector_file = self.model_config["speaker_encoder"]["vector_file"]
-        else:
-            speaker_vector_file = None
-
         if not self.adaptive_training:
             use_pitch = self.model_config.get("use_pitch", True)
-            train_dataset, eval_dataset = load_dataset(self.data_dir, speaker_vector_file, use_pitch)
+            metadata_file = self.train_config["metadata_file"]
+            train_dataset, eval_dataset = load_tts_dataset(metadata_file, self.data_dir, use_pitch)
         else:
             train_dataset, eval_dataset = load_adaptation_dataset(
                 self.data_dir,
@@ -157,9 +153,11 @@ class Trainer:
 
         fields = train_dataset.fields
         phonemes = fields.get("phonemes")
+        print(len(phonemes.vocab.itos))
         with open(os.path.join(self.output_dir, "phonemes.pkl"), "wb") as fo:
             pickle.dump(phonemes, fo)
         speakers = fields.get("speakers")
+        print(len(speakers.vocab.itos))
         with open(os.path.join(self.output_dir, "speakers.pkl"), "wb") as fo:
             pickle.dump(speakers, fo)
 

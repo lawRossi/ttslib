@@ -41,7 +41,7 @@ class TTSDataset(Dataset):
         mel_file = f"{self.data_dir}/{speaker}_{audio_file.replace('.wav', '.npy')}"
         mels = np.load(mel_file)
         values = {
-            "speaker": sample["speaker"], 
+            "speakers": sample["speaker"],
             "durations": sample["durations"],
             "phonemes": sample["phonemes"],
             "mels": mels
@@ -58,7 +58,13 @@ class TTSDataset(Dataset):
             yield self[i]
 
     def __getattr__(self, attr):
-        if attr in self.raw_fields:
+        if attr == "phonemes":
+            for sample in self.samples:
+                yield sample["phonemes"]   
+        elif attr == "speakers":
+            for sample in self.samples:
+                yield sample["speaker"]
+        elif attr in self.raw_fields:
             for example in self:
                 yield getattr(example, attr)
 
@@ -158,7 +164,7 @@ def tokenize_float(text):
 
 
 def load_tts_dataset(metadata_file, data_dir, use_pitch=True):
-    phonemes = Field(tokenize=tokenize, batch_first=True, unk_token=None)
+    phonemes = Field(batch_first=True, unk_token=None)
     speakers = Field(sequential=False, unk_token=None)
     mel_nested = Field(use_vocab=False, batch_first=True, pad_token=0.0, dtype=torch.float)
     mels = NestedField(mel_nested, use_vocab=False)
@@ -176,12 +182,19 @@ def load_tts_dataset(metadata_file, data_dir, use_pitch=True):
         fields["pitch"] = ("pitch", pitch)
 
     with open(metadata_file) as fi:
-        samples = [json.loads(line) for line in fi]
+        samples = []
+        for line in fi:
+            sample = json.loads(line)
+            speaker = sample["speaker"]
+            audio_file = Path(sample["audio_file"]).name
+            mel_file = f"{data_dir}/{speaker}_{audio_file.replace('.wav', '.npy')}"
+            if os.path.exists(mel_file):
+                samples.append(sample)
     num_eval = int(len(samples) * 0.01)
     train_samples = samples[:-num_eval]
     eval_samples = samples[-num_eval:]
-    train_dataset = TTSDataset(train_samples, "train", fields)
-    eval_dataset = TTSDataset(eval_samples, "eval", fields)
+    train_dataset = TTSDataset(train_samples, data_dir, fields)
+    eval_dataset = TTSDataset(eval_samples, data_dir, fields)
 
     phonemes.build_vocab(train_dataset)
     speakers.build_vocab(train_dataset)
@@ -235,7 +248,7 @@ def load_adaptation_dataset(data_dir, checkpoint_dir):
 
 
 if __name__ == "__main__":
-    train_data, eval_data = load_align_dataset("data/metadata.json", "data/mels")
+    train_data, eval_data = load_tts_dataset("data/metadata.json", "data/mels", False)
     # train_data, eval_data = load_dataset("data", use_pitch=False)
     # data_iter = BucketIterator(train_data, 32, shuffle=True, sort_key="mels")
     # print(len(train_data), len(eval_data), len(train_data)+len(eval_data))
@@ -243,11 +256,8 @@ if __name__ == "__main__":
     #     print(b.mels.shape)
     #     print(b.pitch.shape)
 
-    data_iter = BucketIterator(eval_data, 2, train=False, sort=False)
+    data_iter = BucketIterator(train_data, 2, train=False, sort=False)
     for b in data_iter:
         print(b.mels.shape)
         print(b.phonemes)
-        print(b.phonemes_with_blank)
-        print(b.mel_lens)
-        print(b.phoneme_lens)
         break
